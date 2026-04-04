@@ -112,7 +112,6 @@ class QuizBot:
         self.groups = self.load_groups()
         self.settings = self.load_settings()
         self.stats = self.load_stats()
-        self.sudo_users = self.load_sudo_users()  # Load sudo users
         self.broadcast_mode = {}
         self.scheduler_task = None
         self.quiz_interval = self.settings.get('quiz_interval', 3600)  # Default 1 hour
@@ -159,53 +158,12 @@ class QuizBot:
                 'last_quiz_sent': None,
                 'group_engagement': {},
                 'total_broadcasts_sent': 0,
-                'manual_quizzes_sent': 0
+                'manual_quizzes_sent': 0,
+                'quiz_reports_received': 0,
+                'quizzes_deleted_by_reports': 0
             }
             self.mongo.insert_one('stats', stats)
         return stats
-    
-    def load_sudo_users(self):
-        """Load sudo users from MongoDB"""
-        sudo_users = self.mongo.find('sudo_users')
-        print(f"✅ Loaded {len(sudo_users)} sudo users from database")
-        return sudo_users
-    
-    def is_admin_or_sudo(self, user_id):
-        """Check if user is admin or sudo user"""
-        return user_id == ADMIN_USER_ID or any(sudo['user_id'] == user_id for sudo in self.sudo_users)
-    
-    def get_sudo_user(self, user_id):
-        """Get sudo user by user_id"""
-        return self.mongo.find_one('sudo_users', {'user_id': user_id})
-    
-    def add_sudo_user(self, user_id, username=None, added_by=None):
-        """Add a sudo user"""
-        if self.get_sudo_user(user_id):
-            return False, "User is already a sudo user!"
-        
-        sudo_user = {
-            'user_id': user_id,
-            'username': username,
-            'added_by': added_by or ADMIN_USER_ID,
-            'added_date': datetime.now().isoformat(),
-            'rights': 'full'  # Same as admin
-        }
-        
-        self.mongo.insert_one('sudo_users', sudo_user)
-        self.sudo_users = self.load_sudo_users()  # Reload sudo users
-        
-        return True, f"✅ User @{username if username else user_id} has been added as sudo user!"
-    
-    def remove_sudo_user(self, user_id):
-        """Remove a sudo user"""
-        sudo_user = self.get_sudo_user(user_id)
-        if not sudo_user:
-            return False, "User is not a sudo user!"
-        
-        self.mongo.delete_one('sudo_users', {'user_id': user_id})
-        self.sudo_users = self.load_sudo_users()  # Reload sudo users
-        
-        return True, f"✅ User @{sudo_user.get('username', user_id)} has been removed from sudo users!"
     
     def save_quiz(self, quiz):
         """Save quiz to MongoDB"""
@@ -335,7 +293,7 @@ class QuizBot:
         chat_type = update.effective_chat.type
         
         if chat_type == 'private':
-            if self.is_admin_or_sudo(user_id):
+            if user_id == ADMIN_USER_ID:
                 keyboard = [
                     [InlineKeyboardButton("📊 View Statistics", callback_data="stats")],
                     [InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz")],
@@ -344,15 +302,14 @@ class QuizBot:
                     [InlineKeyboardButton("👥 Manage Groups", callback_data="manage_groups")],
                     [InlineKeyboardButton("📋 Export Data", callback_data="export_data")],
                     [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes")],
-                    [InlineKeyboardButton("👑 Manage Sudo", callback_data="manage_sudo")]
+                    [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 quiz_interval_hours = self.quiz_interval / 3600
-                user_type = "Admin" if user_id == ADMIN_USER_ID else "Sudo User"
                 
                 await update.message.reply_text(
-                    f"👋 **{user_type} Dashboard**\n\n"
+                    f"👋 **Admin Dashboard**\n\n"
                     f"I'm your Quiz Bot! Choose an option below:\n\n"
                     f"📊 **Statistics** - View detailed bot analytics\n"
                     f"📝 **Add Quiz** - Create and send me a QUIZ MODE poll to save as quiz\n"
@@ -361,7 +318,7 @@ class QuizBot:
                     f"👥 **Manage Groups** - View and manage groups\n"
                     f"📋 **Export Data** - Export quizzes and stats\n"
                     f"🔄 **Reset Quizzes** - Delete all saved quizzes\n"
-                    f"👑 **Manage Sudo** - Add/remove sudo users\n\n"
+                    f"⚠️ **View Reports** - Check reported quizzes\n\n"
                     f"To add a quiz: Create a QUIZ MODE poll and send it to me!",
                     reply_markup=reply_markup
                 )
@@ -370,7 +327,8 @@ class QuizBot:
                     "👋 Hello! I'm a quiz bot that sends random quiz polls regularly.\n\n"
                     "Add me to your group and make me an admin to start receiving fun quiz polls!\n\n"
                     "⚡ **Group Commands:**\n"
-                    "• /rquiz - Send immediate random quiz (Group admins only)"
+                    "• /rquiz - Send immediate random quiz (Group admins only)\n"
+                    "• /qreport - Report a quiz for review (Reply to a quiz with this command)"
                 )
         else:
             # Bot added to a group
@@ -408,8 +366,8 @@ class QuizBot:
         # Reload groups from MongoDB
         self.groups = self.load_groups()
         
-        # Send welcome message with group controls for admin/sudo
-        if self.is_admin_or_sudo(update.effective_user.id):
+        # Send welcome message with group controls for admin
+        if update.effective_user.id == ADMIN_USER_ID:
             keyboard = [
                 [InlineKeyboardButton("🚫 Remove from Group", callback_data=f"remove_group_{chat_id}")],
                 [InlineKeyboardButton("📊 Group Stats", callback_data=f"group_stats_{chat_id}")]
@@ -420,11 +378,11 @@ class QuizBot:
             await update.message.reply_text(message)
     
     async def handle_private_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle private messages from admin/sudo"""
+        """Handle private messages from admin"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("I only accept commands from admin or sudo users.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("I only accept commands from the admin.")
             return
         
         # Check if user is in broadcast mode
@@ -511,7 +469,8 @@ class QuizBot:
             f"👥 Will be sent to: {len(self.groups)} groups\n"
             f"⏰ Next quiz in: {self.quiz_interval / 3600} hours\n\n"
             f"💡 Note: When sent to groups, quizzes will always be NON-ANONYMOUS (voters visible)\n"
-            f"💡 Group admins can use /rquiz to send immediate quizzes!"
+            f"💡 Group admins can use /rquiz to send immediate quizzes!\n"
+            f"⚠️ Users can report quizzes with /qreport command"
         )
     
     async def send_random_quiz(self):
@@ -603,11 +562,11 @@ class QuizBot:
             await update.message.reply_text("❌ This command can only be used in groups!")
             return
         
-        # Check if user is admin of the group or bot admin/sudo
+        # Check if user is admin of the group or bot admin
         is_admin = False
         
-        # Check if user is bot admin or sudo
-        if self.is_admin_or_sudo(user_id):
+        # Check if user is bot admin
+        if user_id == ADMIN_USER_ID:
             is_admin = True
         else:
             # Check if user is admin in the group
@@ -673,191 +632,467 @@ class QuizBot:
             print(f"Error sending immediate quiz: {e}")
             await update.message.reply_text("❌ Failed to send quiz. Please try again later.")
     
-    async def sudo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /sudo command to add sudo users"""
+    async def report_quiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /qreport command - report a quiz for review"""
+        chat_id = update.effective_chat.id
         user_id = update.effective_user.id
+        message_id = update.effective_message.message_id
         
-        # Only admin can add sudo users
-        if user_id != ADMIN_USER_ID:
-            await update.message.reply_text("❌ Only the bot owner can add sudo users!")
+        # Check if it's a group chat
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("❌ This command can only be used in groups!")
             return
         
-        if not context.args:
+        # Check if the message is a reply to a quiz
+        if not update.message.reply_to_message or not update.message.reply_to_message.poll:
             await update.message.reply_text(
-                "👑 **Add Sudo User**\n\n"
-                "Usage: `/sudo <user_id> [username]`\n\n"
-                "Examples:\n"
-                "• `/sudo 123456789` - Add user by ID\n"
-                "• `/sudo 123456789 john_doe` - Add user by ID with username\n\n"
-                f"📊 Current sudo users: {len(self.sudo_users)}"
+                "❌ Please reply to a quiz message with /qreport!\n\n"
+                "**Usage:**\n"
+                "1. Find a quiz poll sent by the bot\n"
+                "2. Reply to that quiz message\n"
+                "3. Send `/qreport`\n\n"
+                "The bot will forward the quiz to the admin for review."
             )
             return
         
-        try:
-            target_user_id = int(context.args[0])
-            username = context.args[1] if len(context.args) > 1 else None
-            
-            # Check if trying to add admin as sudo
-            if target_user_id == ADMIN_USER_ID:
-                await update.message.reply_text("❌ The bot owner is already the supreme admin!")
-                return
-            
-            # Check if user is already sudo
-            if self.get_sudo_user(target_user_id):
-                await update.message.reply_text("❌ This user is already a sudo user!")
-                return
-            
-            success, message = self.add_sudo_user(target_user_id, username, user_id)
-            await update.message.reply_text(message)
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID! Please provide a numeric user ID.")
-    
-    async def unsudo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /unsudo command to remove sudo users"""
-        user_id = update.effective_user.id
+        replied_poll = update.message.reply_to_message.poll
         
-        # Only admin can remove sudo users
-        if user_id != ADMIN_USER_ID:
-            await update.message.reply_text("❌ Only the bot owner can remove sudo users!")
+        # Check if it's a quiz mode poll (has correct_option_id)
+        if replied_poll.correct_option_id is None:
+            await update.message.reply_text("❌ This is not a quiz! Only quiz polls can be reported.")
             return
         
-        if not context.args:
-            await update.message.reply_text(
-                "👑 **Remove Sudo User**\n\n"
-                "Usage: `/unsudo <user_id>`\n\n"
-                "Examples:\n"
-                "• `/unsudo 123456789` - Remove user by ID\n\n"
-                f"📊 Current sudo users: {len(self.sudo_users)}"
+        # Extract quiz information
+        quiz_info = {
+            'chat_id': chat_id,
+            'message_id': update.message.reply_to_message.message_id,
+            'question': replied_poll.question,
+            'options': [option.text for option in replied_poll.options],
+            'correct_option_id': replied_poll.correct_option_id,
+            'reported_by': {
+                'user_id': user_id,
+                'username': update.effective_user.username,
+                'first_name': update.effective_user.first_name,
+            },
+            'report_time': datetime.now().isoformat(),
+            'group_name': update.effective_chat.title,
+            'original_message_link': f"https://t.me/c/{str(chat_id)[4:]}/{update.message.reply_to_message.message_id}"
+        }
+        
+        # Generate a unique report ID
+        report_id = f"report_{chat_id}_{message_id}"
+        
+        # Save report to MongoDB
+        self.mongo.insert_one('quiz_reports', {
+            '_id': report_id,
+            'status': 'pending',  # pending, reviewed, deleted, ignored
+            **quiz_info
+        })
+        
+        # Update stats
+        self.stats['quiz_reports_received'] = self.stats.get('quiz_reports_received', 0) + 1
+        self.save_stats()
+        
+        # Send confirmation to the user
+        await update.message.reply_text(
+            f"✅ **Quiz Reported Successfully!**\n\n"
+            f"📝 **Question:** {replied_poll.question[:100]}...\n\n"
+            f"The quiz has been forwarded to the admin for review.\n"
+            f"Thank you for helping improve the quiz quality!"
+        )
+        
+        # Forward the quiz to admin with action buttons
+        await self.send_quiz_report_to_admin(context, quiz_info, report_id)
+    
+    async def send_quiz_report_to_admin(self, context: ContextTypes.DEFAULT_TYPE, quiz_info: dict, report_id: str):
+        """Send quiz report to admin with action buttons"""
+        
+        # Format quiz information
+        options_text = "\n".join([f"• {option}" for option in quiz_info['options']])
+        correct_answer = quiz_info['options'][quiz_info['correct_option_id']]
+        
+        # Handle username display
+        username = quiz_info['reported_by']['username']
+        username_display = f" (@{username})" if username else ""
+        
+        report_text = (
+            f"⚠️ **QUIZ REPORTED FOR REVIEW**\n\n"
+            f"📝 **Question:** {quiz_info['question']}\n\n"
+            f"📋 **Options:**\n{options_text}\n\n"
+            f"✅ **Correct Answer:** {correct_answer}\n\n"
+            f"📊 **Report Details:**\n"
+            f"• 👤 Reported by: {quiz_info['reported_by']['first_name']}{username_display}\n"
+            f"• 👥 Group: {quiz_info['group_name']}\n"
+            f"• 🕐 Time: {datetime.fromisoformat(quiz_info['report_time']).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"• 🔗 Message: [View Original]({quiz_info['original_message_link']})\n\n"
+            f"**What would you like to do with this quiz?**"
+        )
+        
+        # Create action buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report_id}"),
+                InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report_id}")
+            ],
+            [
+                InlineKeyboardButton("📝 View Similar Quizzes", callback_data=f"view_similar_{report_id}"),
+                InlineKeyboardButton("📊 View All Reports", callback_data="view_reports")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send to admin
+        await context.bot.send_message(
+            chat_id=ADMIN_USER_ID,
+            text=report_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def handle_delete_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
+        """Handle delete quiz action from admin"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Get report details
+        report = self.mongo.find_one('quiz_reports', {'_id': report_id})
+        if not report:
+            await query.edit_message_text("❌ Report not found or already processed.")
+            return
+        
+        # Find and delete the quiz from database
+        deleted_count = 0
+        similar_quizzes = []
+        
+        # Find quizzes with similar question (case-insensitive partial match)
+        all_quizzes = self.mongo.find('quizzes', {})
+        for quiz in all_quizzes:
+            if quiz['question'].lower() == report['question'].lower():
+                # Exact match - delete
+                self.mongo.delete_one('quizzes', {'_id': quiz['_id']})
+                deleted_count += 1
+            elif report['question'].lower() in quiz['question'].lower() or quiz['question'].lower() in report['question'].lower():
+                # Partial match - add to similar list
+                similar_quizzes.append(quiz)
+        
+        # Update report status
+        self.mongo.update_one('quiz_reports', {'_id': report_id}, {
+            '$set': {
+                'status': 'deleted',
+                'action_taken': 'quiz_deleted',
+                'deleted_quizzes': deleted_count,
+                'action_time': datetime.now().isoformat()
+            }
+        })
+        
+        # Update stats
+        self.stats['quizzes_deleted_by_reports'] = self.stats.get('quizzes_deleted_by_reports', 0) + deleted_count
+        self.save_stats()
+        
+        # Reload quizzes
+        self.quizzes = self.load_quizzes()
+        
+        # Prepare response
+        response_text = (
+            f"✅ **Quiz Deleted Successfully!**\n\n"
+            f"🗑️ Deleted {deleted_count} quiz(es) with matching question:\n"
+            f"`{report['question'][:100]}...`\n\n"
+        )
+        
+        if similar_quizzes:
+            response_text += f"⚠️ Found {len(similar_quizzes)} similar quizzes:\n"
+            for i, quiz in enumerate(similar_quizzes[:5], 1):  # Show only first 5
+                response_text += f"{i}. {quiz['question'][:80]}...\n"
+            
+            if len(similar_quizzes) > 5:
+                response_text += f"... and {len(similar_quizzes) - 5} more\n"
+            
+            # Add option to delete all similar
+            keyboard = [
+                [InlineKeyboardButton("🗑️ Delete All Similar", callback_data=f"delete_similar_{report_id}")],
+                [InlineKeyboardButton("✅ Done", callback_data="close_report")]
+            ]
+        else:
+            keyboard = [[InlineKeyboardButton("✅ Done", callback_data="close_report")]]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(response_text, reply_markup=reply_markup)
+    
+    async def handle_delete_similar_quizzes(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
+        """Delete all similar quizzes"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Get report details
+        report = self.mongo.find_one('quiz_reports', {'_id': report_id})
+        if not report:
+            await query.edit_message_text("❌ Report not found.")
+            return
+        
+        # Find and delete all similar quizzes
+        deleted_count = 0
+        all_quizzes = self.mongo.find('quizzes', {})
+        
+        for quiz in all_quizzes:
+            # Check for similarity (partial match in either direction)
+            if (report['question'].lower() in quiz['question'].lower() or 
+                quiz['question'].lower() in report['question'].lower()):
+                self.mongo.delete_one('quizzes', {'_id': quiz['_id']})
+                deleted_count += 1
+        
+        # Update report
+        self.mongo.update_one('quiz_reports', {'_id': report_id}, {
+            '$set': {
+                'additional_deleted': deleted_count,
+                'total_deleted': report.get('deleted_quizzes', 0) + deleted_count,
+                'action_time': datetime.now().isoformat()
+            }
+        })
+        
+        # Update stats
+        self.stats['quizzes_deleted_by_reports'] = self.stats.get('quizzes_deleted_by_reports', 0) + deleted_count
+        self.save_stats()
+        
+        # Reload quizzes
+        self.quizzes = self.load_quizzes()
+        
+        response_text = (
+            f"✅ **All Similar Quizzes Deleted!**\n\n"
+            f"🗑️ Deleted {deleted_count} similar quizzes\n"
+            f"📝 Total deleted for this report: {report.get('deleted_quizzes', 0) + deleted_count}\n\n"
+            f"The quiz database has been cleaned."
+        )
+        
+        keyboard = [[InlineKeyboardButton("✅ Done", callback_data="close_report")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(response_text, reply_markup=reply_markup)
+    
+    async def handle_ignore_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
+        """Handle ignore report action"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Update report status
+        self.mongo.update_one('quiz_reports', {'_id': report_id}, {
+            '$set': {
+                'status': 'ignored',
+                'action_taken': 'ignored',
+                'action_time': datetime.now().isoformat()
+            }
+        })
+        
+        await query.edit_message_text(
+            "✅ **Report Ignored**\n\n"
+            "The quiz report has been marked as ignored.\n"
+            "No action was taken on the quiz.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Close", callback_data="close_report")]])
+        )
+    
+    async def handle_view_similar(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
+        """View similar quizzes in database"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Get report details
+        report = self.mongo.find_one('quiz_reports', {'_id': report_id})
+        if not report:
+            await query.edit_message_text("❌ Report not found.")
+            return
+        
+        # Find similar quizzes
+        similar_quizzes = []
+        for quiz in self.quizzes:
+            # Check for similarity
+            if (report['question'].lower() in quiz['question'].lower() or 
+                quiz['question'].lower() in report['question'].lower()):
+                similar_quizzes.append(quiz)
+        
+        if not similar_quizzes:
+            response_text = (
+                f"📝 **No Similar Quizzes Found**\n\n"
+                f"The reported question:\n`{report['question']}`\n\n"
+                f"Was not found in the database.\n"
+                f"It might have been already deleted or never saved."
             )
-            return
-        
-        try:
-            target_user_id = int(context.args[0])
             
-            # Check if trying to remove admin
-            if target_user_id == ADMIN_USER_ID:
-                await update.message.reply_text("❌ Cannot remove the bot owner!")
-                return
-            
-            success, message = self.remove_sudo_user(target_user_id)
-            await update.message.reply_text(message)
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID! Please provide a numeric user ID.")
-    
-    async def manage_sudo_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show sudo users management interface"""
-        user_id = update.effective_user.id
-        
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("❌ This command is for admin/sudo users only.")
-            return
-        
-        sudo_text = f"👑 **Sudo Users Management**\n\n📊 **Total Sudo Users:** {len(self.sudo_users)}\n\n"
-        
-        if self.sudo_users:
-            sudo_text += "**Current Sudo Users:**\n"
-            for i, sudo in enumerate(self.sudo_users, 1):
-                added_by = "Owner" if sudo['added_by'] == ADMIN_USER_ID else f"User {sudo['added_by']}"
-                sudo_text += f"{i}. User ID: `{sudo['user_id']}`"
-                if sudo.get('username'):
-                    sudo_text += f" (@{sudo['username']})"
-                sudo_text += f"\n   Added by: {added_by}\n   Date: {datetime.fromisoformat(sudo['added_date']).strftime('%Y-%m-%d %H:%M')}\n\n"
+            keyboard = [
+                [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")],
+                [InlineKeyboardButton("✅ Close", callback_data="close_report")]
+            ]
         else:
-            sudo_text += "No sudo users added yet.\n\n"
-        
-        keyboard = []
-        if user_id == ADMIN_USER_ID:
-            keyboard.append([InlineKeyboardButton("➕ Add Sudo User", callback_data="add_sudo")])
-            if self.sudo_users:
-                keyboard.append([InlineKeyboardButton("➖ Remove Sudo User", callback_data="remove_sudo")])
-        
-        keyboard.append([InlineKeyboardButton("📊 Statistics", callback_data="stats")])
-        keyboard.append([InlineKeyboardButton("⚙️ Settings", callback_data="settings")])
+            response_text = f"📝 **Found {len(similar_quizzes)} Similar Quiz(es)**\n\n"
+            
+            for i, quiz in enumerate(similar_quizzes[:10], 1):  # Show only first 10
+                status = "✅ Active" if quiz.get('is_active', True) else "❌ Inactive"
+                sent_count = quiz.get('sent_count', 0)
+                manual_count = quiz.get('manual_sent_count', 0)
+                
+                response_text += (
+                    f"**{i}. {quiz['question'][:80]}...**\n"
+                    f"   Status: {status} | Auto: {sent_count} | Manual: {manual_count}\n"
+                    f"   ID: `{quiz['_id']}`\n\n"
+                )
+            
+            if len(similar_quizzes) > 10:
+                response_text += f"... and {len(similar_quizzes) - 10} more similar quizzes\n\n"
+            
+            response_text += "**Options:**"
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("🗑️ Delete All", callback_data=f"delete_similar_{report_id}"),
+                    InlineKeyboardButton("🗑️ Delete Only Exact", callback_data=f"delete_quiz_{report_id}")
+                ],
+                [
+                    InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}"),
+                    InlineKeyboardButton("✅ Close", callback_data="close_report")
+                ]
+            ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(response_text, reply_markup=reply_markup)
+    
+    async def handle_view_reports(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """View all pending quiz reports"""
+        query = update.callback_query
+        await query.answer()
         
-        if update.callback_query:
-            await update.callback_query.edit_message_text(sudo_text, reply_markup=reply_markup)
+        # Get all pending reports
+        pending_reports = self.mongo.find('quiz_reports', {'status': 'pending'})
+        total_reports = self.mongo.find('quiz_reports', {})
+        
+        if not pending_reports:
+            response_text = (
+                f"📊 **Quiz Reports Dashboard**\n\n"
+                f"✅ No pending reports!\n\n"
+                f"📈 **Statistics:**\n"
+                f"• Total reports: {len(total_reports)}\n"
+                f"• Pending: 0\n"
+                f"• Resolved: {len([r for r in total_reports if r['status'] != 'pending'])}\n"
+            )
+            
+            keyboard = [[InlineKeyboardButton("✅ Close", callback_data="close_report")]]
         else:
-            await update.message.reply_text(sudo_text, reply_markup=reply_markup)
-    
-    async def add_sudo_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Add sudo user from callback"""
-        user_id = update.effective_user.id
-        
-        if user_id != ADMIN_USER_ID:
-            await update.callback_query.answer("Only the bot owner can add sudo users!")
-            return
-        
-        await update.callback_query.edit_message_text(
-            "👑 **Add Sudo User**\n\n"
-            "To add a sudo user, use the command:\n"
-            "`/sudo <user_id> [username]`\n\n"
-            "Examples:\n"
-            "• `/sudo 123456789` - Add user by ID\n"
-            "• `/sudo 123456789 john_doe` - Add user by ID with username\n\n"
-            "💡 You can get a user's ID by forwarding their message to @userinfobot\n"
-            "💡 Sudo users have the same rights as the bot owner"
-        )
-    
-    async def remove_sudo_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Remove sudo user from callback"""
-        user_id = update.effective_user.id
-        
-        if user_id != ADMIN_USER_ID:
-            await update.callback_query.answer("Only the bot owner can remove sudo users!")
-            return
-        
-        if not self.sudo_users:
-            await update.callback_query.answer("No sudo users to remove!")
-            return
-        
-        keyboard = []
-        for sudo in self.sudo_users:
-            button_text = f"User {sudo['user_id']}"
-            if sudo.get('username'):
-                button_text += f" (@{sudo['username']})"
-            keyboard.append([InlineKeyboardButton(
-                f"➖ {button_text}", 
-                callback_data=f"remove_sudo_{sudo['user_id']}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="manage_sudo")])
+            response_text = (
+                f"📊 **Quiz Reports Dashboard**\n\n"
+                f"⚠️ **Pending Reports: {len(pending_reports)}**\n\n"
+            )
+            
+            for i, report in enumerate(pending_reports[:5], 1):  # Show only first 5
+                report_time = datetime.fromisoformat(report['report_time']).strftime('%m/%d %H:%M')
+                response_text += (
+                    f"{i}. **{report['question'][:60]}...**\n"
+                    f"   👤 {report['reported_by']['first_name']} | "
+                    f"👥 {report['group_name']}\n"
+                    f"   🕐 {report_time} | "
+                    f"[View]({report['original_message_link']})\n"
+                    f"   [Review](callback:report_{report['_id']})\n\n"
+                )
+            
+            if len(pending_reports) > 5:
+                response_text += f"... and {len(pending_reports) - 5} more pending reports\n\n"
+            
+            response_text += f"📈 **Statistics:**\n"
+            response_text += f"• Total reports: {len(total_reports)}\n"
+            response_text += f"• Pending: {len(pending_reports)}\n"
+            response_text += f"• Resolved: {len(total_reports) - len(pending_reports)}\n"
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="view_reports")],
+                [InlineKeyboardButton("🗑️ Clear All Resolved", callback_data="clear_resolved_reports")],
+                [InlineKeyboardButton("📊 Statistics", callback_data="stats")],
+                [InlineKeyboardButton("✅ Close", callback_data="close_report")]
+            ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(response_text, reply_markup=reply_markup)
+    
+    async def handle_clear_resolved_reports(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Clear all resolved reports"""
+        query = update.callback_query
+        await query.answer()
         
-        await update.callback_query.edit_message_text(
-            "👑 **Remove Sudo User**\n\n"
-            "Select a user to remove from sudo:",
-            reply_markup=reply_markup
+        # Delete all non-pending reports
+        result = self.mongo.delete_many('quiz_reports', {'status': {'$ne': 'pending'}})
+        
+        deleted_count = result.deleted_count if result else 0
+        
+        await query.edit_message_text(
+            f"✅ **Resolved Reports Cleared**\n\n"
+            f"🗑️ Deleted {deleted_count} resolved reports.\n"
+            f"Only pending reports remain in the database.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 View Reports", callback_data="view_reports")]])
         )
     
-    async def confirm_remove_sudo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Confirm and remove sudo user"""
-        user_id = update.effective_user.id
+    async def handle_report_back(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
+        """Go back to report view"""
+        query = update.callback_query
+        await query.answer()
         
-        if user_id != ADMIN_USER_ID:
-            await update.callback_query.answer("Only the bot owner can remove sudo users!")
+        # Get report
+        report = self.mongo.find_one('quiz_reports', {'_id': report_id})
+        if not report:
+            await query.edit_message_text("Report not found.")
             return
         
-        callback_data = update.callback_query.data
-        target_user_id = int(callback_data.split('_')[2])
+        # Recreate the original report message
+        options_text = "\n".join([f"• {option}" for option in report['options']])
+        correct_answer = report['options'][report['correct_option_id']]
         
-        success, message = self.remove_sudo_user(target_user_id)
+        # Handle username display
+        username = report['reported_by']['username']
+        username_display = f" (@{username})" if username else ""
         
-        await update.callback_query.edit_message_text(
-            f"{message}\n\n"
-            f"📊 Remaining sudo users: {len(self.sudo_users)}"
+        report_text = (
+            f"⚠️ **QUIZ REPORTED FOR REVIEW**\n\n"
+            f"📝 **Question:** {report['question']}\n\n"
+            f"📋 **Options:**\n{options_text}\n\n"
+            f"✅ **Correct Answer:** {correct_answer}\n\n"
+            f"📊 **Report Details:**\n"
+            f"• 👤 Reported by: {report['reported_by']['first_name']}{username_display}\n"
+            f"• 👥 Group: {report['group_name']}\n"
+            f"• 🕐 Time: {datetime.fromisoformat(report['report_time']).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"• 🔗 Message: [View Original]({report['original_message_link']})\n\n"
+            f"**What would you like to do with this quiz?**"
         )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report_id}"),
+                InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report_id}")
+            ],
+            [
+                InlineKeyboardButton("📝 View Similar Quizzes", callback_data=f"view_similar_{report_id}"),
+                InlineKeyboardButton("📊 View All Reports", callback_data="view_reports")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(report_text, reply_markup=reply_markup)
+    
+    async def handle_close_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Close the report message"""
+        query = update.callback_query
+        await query.answer()
+        
+        await query.edit_message_text(
+            "✅ Report interface closed.\n"
+            "Use /start to access the main menu.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]])
+        )
+    
+    async def handle_start_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Go back to start menu"""
+        await self.start(update, context)
     
     async def reset_quizzes_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /reset command to delete all quizzes"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         if not context.args or context.args[0].lower() != 'confirm':
@@ -893,8 +1128,8 @@ class QuizBot:
         """Reset quizzes from callback menu"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.callback_query.answer("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.callback_query.answer("This command is for admin only.")
             return
         
         keyboard = [
@@ -917,8 +1152,8 @@ class QuizBot:
         """Confirm and execute quiz reset"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.callback_query.answer("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.callback_query.answer("This command is for admin only.")
             return
         
         # Delete all quizzes
@@ -945,8 +1180,8 @@ class QuizBot:
         """Handle /setexplanation command"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         if not context.args:
@@ -975,8 +1210,8 @@ class QuizBot:
         """Set explanation from callback (settings menu)"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.callback_query.answer("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.callback_query.answer("This command is for admin only.")
             return
         
         current_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
@@ -995,7 +1230,7 @@ class QuizBot:
         """Handle explanation input from settings menu"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id) or not context.user_data.get('waiting_for_explanation'):
+        if user_id != ADMIN_USER_ID or not context.user_data.get('waiting_for_explanation'):
             return
         
         new_explanation = update.message.text
@@ -1016,8 +1251,8 @@ class QuizBot:
         """Show detailed bot statistics"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         total_quizzes = len(self.quizzes)
@@ -1025,6 +1260,9 @@ class QuizBot:
         total_quizzes_sent = self.stats['total_quizzes_sent']
         quizzes_added = self.stats['quizzes_added']
         manual_quizzes_sent = self.stats.get('manual_quizzes_sent', 0)
+        quiz_reports_received = self.stats.get('quiz_reports_received', 0)
+        quizzes_deleted_by_reports = self.stats.get('quizzes_deleted_by_reports', 0)
+        
         active_groups_count = len([g for g in self.groups if g.get('is_active', True)])
         
         # Calculate active groups (active in last 7 days)
@@ -1044,7 +1282,8 @@ class QuizBot:
             f"📝 **Quizzes Database**\n"
             f"   • Total quizzes: {total_quizzes}\n"
             f"   • Quizzes added: {quizzes_added}\n"
-            f"   • Most sent quiz: {most_sent['sent_count'] if most_sent else 0} times\n\n"
+            f"   • Most sent quiz: {most_sent['sent_count'] if most_sent else 0} times\n"
+            f"   • Quizzes deleted by reports: {quizzes_deleted_by_reports}\n\n"
             
             f"👥 **Groups Analytics**\n"
             f"   • Total groups: {total_groups}\n"
@@ -1053,16 +1292,16 @@ class QuizBot:
             f"   • Total quizzes sent: {total_quizzes_sent}\n"
             f"   • Manual quizzes sent: {manual_quizzes_sent}\n\n"
             
+            f"⚠️ **Quiz Reports**\n"
+            f"   • Reports received: {quiz_reports_received}\n"
+            f"   • Pending reports: {len(self.mongo.find('quiz_reports', {'status': 'pending'}))}\n"
+            f"   • Resolved reports: {len(self.mongo.find('quiz_reports', {'status': {'$ne': 'pending'}}))}\n\n"
+            
             f"⏰ **Performance**\n"
             f"   • Bot started: {datetime.fromisoformat(self.stats['bot_start_time']).strftime('%Y-%m-%d %H:%M')}\n"
             f"   • Last quiz sent: {datetime.fromisoformat(self.stats['last_quiz_sent']).strftime('%Y-%m-%d %H:%M') if self.stats['last_quiz_sent'] else 'Never'}\n"
             f"   • Quiz interval: {quiz_interval_hours} hours\n"
             f"   • Next quiz in: ~{quiz_interval_hours} hours\n\n"
-            
-            f"👑 **Users**\n"
-            f"   • Admin: 1 (Owner)\n"
-            f"   • Sudo users: {len(self.sudo_users)}\n"
-            f"   • Total privileged users: {1 + len(self.sudo_users)}\n\n"
             
             f"📈 **Engagement**\n"
             f"   • Avg quizzes per group: {total_quizzes_sent/total_groups if total_groups > 0 else 0:.1f}\n"
@@ -1075,7 +1314,7 @@ class QuizBot:
             [InlineKeyboardButton("🔄 Refresh", callback_data="stats")],
             [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")],
             [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes")],
-            [InlineKeyboardButton("👑 Manage Sudo", callback_data="manage_sudo")]
+            [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1088,8 +1327,8 @@ class QuizBot:
         """Show bot settings"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         quiz_interval_hours = self.quiz_interval / 3600
@@ -1106,10 +1345,11 @@ class QuizBot:
             f"👥 **Active Groups**: {len([g for g in self.groups if g.get('is_active', True)])}\n"
             f"📝 **Active Quizzes**: {len([q for q in self.quizzes if q.get('is_active', True)])}\n"
             f"🎯 **Manual Quizzes Sent**: {self.stats.get('manual_quizzes_sent', 0)}\n"
-            f"👑 **Sudo Users**: {len(self.sudo_users)}\n\n"
+            f"⚠️ **Quiz Reports**: {self.stats.get('quiz_reports_received', 0)}\n\n"
             f"💡 Use /setdelay <time> to change the quiz interval\n"
             f"💡 Use /setexplanation to change quiz explanation\n"
-            f"💡 Group admins can use /rquiz for immediate quizzes"
+            f"💡 Group admins can use /rquiz for immediate quizzes\n"
+            f"⚠️ Users can report quizzes with /qreport"
         )
         
         keyboard = [
@@ -1118,8 +1358,8 @@ class QuizBot:
             [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive")],
             [InlineKeyboardButton("🔄 Refresh Groups", callback_data="refresh_groups")],
             [InlineKeyboardButton("📊 Statistics", callback_data="stats")],
-            [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes")],
-            [InlineKeyboardButton("👑 Manage Sudo", callback_data="manage_sudo")]
+            [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports")],
+            [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1132,8 +1372,8 @@ class QuizBot:
         """Handle /setdelay command directly"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         if not context.args:
@@ -1196,8 +1436,8 @@ class QuizBot:
         """Set quiz interval from callback (settings menu)"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.callback_query.answer("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.callback_query.answer("This command is for admin only.")
             return
         
         await update.callback_query.edit_message_text(
@@ -1219,7 +1459,7 @@ class QuizBot:
         """Handle quiz interval input from settings menu"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id) or not context.user_data.get('waiting_for_interval'):
+        if user_id != ADMIN_USER_ID or not context.user_data.get('waiting_for_interval'):
             return
         
         time_input = update.message.text
@@ -1270,8 +1510,8 @@ class QuizBot:
         """Start broadcast mode"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         self.broadcast_mode[user_id] = True
@@ -1344,8 +1584,8 @@ class QuizBot:
         """Export bot data to JSON and CSV files"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         try:
@@ -1386,23 +1626,6 @@ class QuizBot:
                     caption="👥 Groups Export (CSV)"
                 )
             
-            # Export sudo users to CSV
-            if self.sudo_users:
-                with open('sudo_users_export.csv', 'w', newline='', encoding='utf-8') as csvfile:
-                    fieldnames = ['user_id', 'username', 'added_by', 'added_date', 'rights']
-                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                    writer.writeheader()
-                    for sudo in self.sudo_users:
-                        writer.writerow(sudo)
-                
-                # Send sudo users CSV
-                await context.bot.send_document(
-                    chat_id=user_id,
-                    document=open('sudo_users_export.csv', 'rb'),
-                    filename='sudo_users_export.csv',
-                    caption="👑 Sudo Users Export (CSV)"
-                )
-            
             # Export stats to JSON
             with open('stats_export.json', 'w', encoding='utf-8') as f:
                 json.dump(self.stats, f, indent=2, ensure_ascii=False)
@@ -1415,14 +1638,34 @@ class QuizBot:
                 caption="📊 Statistics Export (JSON)"
             )
             
+            # Export reports to CSV
+            reports = self.mongo.find('quiz_reports', {})
+            if reports:
+                with open('reports_export.csv', 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['_id', 'status', 'question', 'options', 'correct_option_id', 'reported_by', 'report_time', 'group_name', 'action_taken', 'action_time']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for report in reports:
+                        report_export = report.copy()
+                        report_export['options'] = ' | '.join(report['options'])
+                        report_export['reported_by'] = f"{report['reported_by']['first_name']} ({report['reported_by']['user_id']})"
+                        writer.writerow(report_export)
+                
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=open('reports_export.csv', 'rb'),
+                    filename='reports_export.csv',
+                    caption="⚠️ Quiz Reports Export (CSV)"
+                )
+            
             # Send summary
             summary = (
                 f"✅ **Data Export Completed**\n\n"
                 f"📁 Files exported:\n"
                 f"• quizzes_export.csv ({len(self.quizzes)} quizzes)\n"
                 f"• groups_export.csv ({len(self.groups)} groups)\n"
-                f"• sudo_users_export.csv ({len(self.sudo_users)} sudo users)\n"
-                f"• stats_export.json (statistics)\n\n"
+                f"• stats_export.json (statistics)\n"
+                f"• reports_export.csv ({len(reports)} reports)\n\n"
                 f"💾 All data has been exported successfully!"
             )
             
@@ -1442,8 +1685,8 @@ class QuizBot:
         """Show group management interface"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         total_groups = len(self.groups)
@@ -1484,8 +1727,8 @@ class QuizBot:
         """Remove inactive groups"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         # Find inactive groups
@@ -1512,8 +1755,8 @@ class QuizBot:
         """Reactivate all groups"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         # Reactivate all groups
@@ -1533,8 +1776,8 @@ class QuizBot:
         """Refresh groups list"""
         user_id = update.effective_user.id
         
-        if not self.is_admin_or_sudo(user_id):
-            await update.message.reply_text("This command is for admin/sudo users only.")
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("This command is for admin only.")
             return
         
         # Reload groups from MongoDB
@@ -1543,6 +1786,292 @@ class QuizBot:
         active_groups = len([g for g in self.groups if g.get('is_active', True)])
         
         await update.callback_query.answer(f"Groups refreshed! {active_groups} active groups loaded.")
+    
+    async def list_groups_with_links(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /grouplist command - list all groups with invite links"""
+        user_id = update.effective_user.id
+        
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("❌ This command is for admin only.")
+            return
+        
+        if not self.groups:
+            await update.message.reply_text("❌ No groups found in database.")
+            return
+        
+        active_groups = [g for g in self.groups if g.get('is_active', True)]
+        inactive_groups = [g for g in self.groups if not g.get('is_active', True)]
+        
+        # Show loading message
+        loading_msg = await update.message.reply_text("🔄 Fetching group links... This may take a moment.")
+        
+        groups_text = f"👥 **Groups List ({len(self.groups)} total)**\n\n"
+        groups_text += f"🟢 Active: {len(active_groups)}\n"
+        groups_text += f"🔴 Inactive: {len(inactive_groups)}\n\n"
+        
+        all_links_text = "📋 **Group List with Links**\n\n"
+        failed_groups = []
+        success_count = 0
+        
+        # Process groups in batches to avoid rate limiting
+        for i, group in enumerate(self.groups, 1):
+            chat_id = group['chat_id']
+            group_title = group.get('title', f"Group {chat_id}")
+            status = "🟢" if group.get('is_active', True) else "🔴"
+            
+            try:
+                # Try to get invite link (requires bot to have admin permissions)
+                chat = await context.bot.get_chat(chat_id)
+                
+                try:
+                    # Try to create invite link
+                    invite_link_obj = await context.bot.create_chat_invite_link(
+                        chat_id=chat_id,
+                        member_limit=1,
+                        expire_date=datetime.now() + timedelta(days=7)
+                    )
+                    invite_link = invite_link_obj.invite_link
+                    link_text = f"[Join {group_title}]({invite_link})"
+                except Exception as link_error:
+                    # If can't create link, try to export existing link
+                    try:
+                        invite_link = await context.bot.export_chat_invite_link(chat_id)
+                        link_text = f"[Join {group_title}]({invite_link})"
+                    except Exception as export_error:
+                        link_text = "❌ No invite link (bot needs admin)"
+                        invite_link = None
+                
+                # Add to detailed list
+                all_links_text += f"{i}. {status} **{group_title}**\n"
+                all_links_text += f"   • ID: `{chat_id}`\n"
+                all_links_text += f"   • Link: {link_text}\n"
+                all_links_text += f"   • Auto Quizzes: {group.get('quizzes_received', 0)}\n"
+                all_links_text += f"   • Manual Quizzes: {group.get('manual_quizzes_received', 0)}\n"
+                
+                if invite_link:
+                    success_count += 1
+                
+                all_links_text += "\n"
+                
+                # Add to summary text
+                groups_text += f"{i}. {status} **{group_title}**\n"
+                if invite_link:
+                    groups_text += f"   🔗 {invite_link}\n"
+                groups_text += f"   📊 Auto: {group.get('quizzes_received', 0)} | Manual: {group.get('manual_quizzes_received', 0)}\n\n"
+                
+            except Exception as e:
+                # Group not accessible or bot removed
+                failed_groups.append(group_title)
+                all_links_text += f"{i}. 🔴 **{group_title}** (❌ Bot not in group)\n"
+                all_links_text += f"   • ID: `{chat_id}`\n"
+                all_links_text += f"   • Last active: {group.get('last_activity', 'Never')[:10]}\n\n"
+                
+                groups_text += f"{i}. 🔴 **{group_title}** (Bot removed)\n\n"
+                
+                # Mark as inactive
+                group['is_active'] = False
+                self.save_group(group)
+            
+            # Small delay to avoid rate limiting
+            await asyncio.sleep(0.1)
+        
+        # Reload groups after updates
+        self.groups = self.load_groups()
+        
+        # Update loading message with summary
+        await loading_msg.delete()
+        
+        # Send summary first
+        summary_text = (
+            f"📊 **Groups Summary**\n\n"
+            f"✅ Successfully fetched links: {success_count}/{len(self.groups)}\n"
+            f"❌ Failed/Inaccessible: {len(failed_groups)}\n"
+            f"🟢 Active groups: {len(active_groups)}\n"
+            f"🔴 Inactive groups: {len(inactive_groups)}\n\n"
+        )
+        
+        if failed_groups:
+            summary_text += "❌ **Failed Groups (Bot not in group):**\n"
+            for group in failed_groups[:5]:  # Show only first 5
+                summary_text += f"• {group}\n"
+            if len(failed_groups) > 5:
+                summary_text += f"... and {len(failed_groups) - 5} more\n"
+            summary_text += "\n"
+        
+        # Add instructions
+        summary_text += (
+            "📝 **Note:** Links expire in 7 days\n"
+            "🔄 Use /refreshgroups to update group status\n"
+            "🗑️ Inactive groups are automatically cleaned"
+        )
+        
+        # Create inline keyboard for navigation
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh List", callback_data="refresh_groups")],
+            [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive")],
+            [InlineKeyboardButton("📊 All Group Stats", callback_data="manage_groups")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(summary_text, reply_markup=reply_markup)
+        
+        # Check if detailed list is too long for Telegram
+        if len(all_links_text) > 4000:
+            # Split into multiple messages
+            chunks = [all_links_text[i:i+4000] for i in range(0, len(all_links_text), 4000)]
+            for i, chunk in enumerate(chunks[:3]):  # Send max 3 chunks
+                if i == 0:
+                    await update.message.reply_text(chunk, parse_mode='Markdown')
+                else:
+                    await update.message.reply_text(f"... (continued)\n\n{chunk}", parse_mode='Markdown')
+                await asyncio.sleep(0.5)
+            
+            if len(chunks) > 3:
+                await update.message.reply_text(f"📝 And {len(chunks)-3} more parts... List truncated.")
+        else:
+            # Send complete list
+            await update.message.reply_text(all_links_text, parse_mode='Markdown')
+    
+    async def quick_groups_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /groups command - quick list of groups without links"""
+        user_id = update.effective_user.id
+        
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("❌ This command is for admin only.")
+            return
+        
+        if not self.groups:
+            await update.message.reply_text("❌ No groups found in database.")
+            return
+        
+        active_groups = [g for g in self.groups if g.get('is_active', True)]
+        inactive_groups = [g for g in self.groups if not g.get('is_active', True)]
+        
+        groups_text = f"👥 **Groups Summary ({len(self.groups)} total)**\n\n"
+        
+        if active_groups:
+            groups_text += f"🟢 **Active Groups ({len(active_groups)})**\n"
+            for i, group in enumerate(active_groups[:20], 1):  # Show only first 20
+                groups_text += f"{i}. {group.get('title', 'Unknown')} (ID: `{group['chat_id']}`)\n"
+                groups_text += f"   📊 Auto: {group.get('quizzes_received', 0)} | Manual: {group.get('manual_quizzes_received', 0)}\n"
+            
+            if len(active_groups) > 20:
+                groups_text += f"... and {len(active_groups) - 20} more\n"
+            
+            groups_text += "\n"
+        
+        if inactive_groups:
+            groups_text += f"🔴 **Inactive Groups ({len(inactive_groups)})**\n"
+            for i, group in enumerate(inactive_groups[:10], 1):  # Show only first 10
+                groups_text += f"{i}. {group.get('title', 'Unknown')} (ID: `{group['chat_id']}`)\n"
+            
+            if len(inactive_groups) > 10:
+                groups_text += f"... and {len(inactive_groups) - 10} more\n"
+            
+            groups_text += "\n"
+        
+        groups_text += (
+            f"📊 **Stats:**\n"
+            f"• Total quizzes sent to all groups: {self.stats.get('total_quizzes_sent', 0)}\n"
+            f"• Manual quizzes sent: {self.stats.get('manual_quizzes_sent', 0)}\n"
+            f"• Active groups percentage: {(len(active_groups)/len(self.groups)*100 if self.groups else 0):.1f}%\n\n"
+            f"💡 Use `/grouplist` for detailed list with invite links\n"
+            f"💡 Use `/grouplinks` for only links (export format)"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔗 Get Links", callback_data="get_group_links")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="manage_groups")],
+            [InlineKeyboardButton("📊 Full Stats", callback_data="stats")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(groups_text, reply_markup=reply_markup)
+    
+    async def export_group_links(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /grouplinks command - export group links in simple format"""
+        user_id = update.effective_user.id
+        
+        if user_id != ADMIN_USER_ID:
+            await update.message.reply_text("❌ This command is for admin only.")
+            return
+        
+        if not self.groups:
+            await update.message.reply_text("❌ No groups found in database.")
+            return
+        
+        loading_msg = await update.message.reply_text("🔄 Generating group links...")
+        
+        links_text = "🔗 **Group Invite Links**\n\n"
+        links_only = "📋 **Links Only (for export):**\n\n"
+        
+        success_count = 0
+        
+        for group in self.groups:
+            if not group.get('is_active', True):
+                continue
+                
+            chat_id = group['chat_id']
+            group_title = group.get('title', f"Group {chat_id}")
+            
+            try:
+                # Try to create invite link
+                try:
+                    invite_link_obj = await context.bot.create_chat_invite_link(
+                        chat_id=chat_id,
+                        member_limit=1,
+                        expire_date=datetime.now() + timedelta(days=7)
+                    )
+                    invite_link = invite_link_obj.invite_link
+                except:
+                    # Try to export existing link
+                    invite_link = await context.bot.export_chat_invite_link(chat_id)
+                
+                links_text += f"• **{group_title}**\n{invite_link}\n\n"
+                links_only += f"{invite_link}\n"
+                success_count += 1
+                
+            except Exception as e:
+                links_text += f"• **{group_title}** - ❌ No link available\n\n"
+            
+            await asyncio.sleep(0.1)
+        
+        await loading_msg.delete()
+        
+        summary = (
+            f"✅ **Group Links Export**\n\n"
+            f"📊 Generated {success_count} links from {len(self.groups)} groups\n"
+            f"⏰ Links expire in 7 days\n"
+            f"📋 Copy links from below section\n\n"
+            f"💡 **Tip:** Use `/grouplist` for detailed view\n"
+            f"💡 **Tip:** Use `/groups` for quick overview"
+        )
+        
+        await update.message.reply_text(summary)
+        
+        # Send links text (might be long)
+        if len(links_text) > 4000:
+            chunks = [links_text[i:i+4000] for i in range(0, len(links_text), 4000)]
+            for chunk in chunks[:3]:
+                await update.message.reply_text(chunk, parse_mode='Markdown')
+                await asyncio.sleep(0.5)
+        else:
+            await update.message.reply_text(links_text, parse_mode='Markdown')
+        
+        # Send links-only section
+        await update.message.reply_text("📋 **Copy-paste section:**")
+        if len(links_only) > 4000:
+            # Save to file if too long
+            with open('group_links.txt', 'w', encoding='utf-8') as f:
+                f.write(links_only)
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=open('group_links.txt', 'rb'),
+                filename='group_links.txt',
+                caption="📋 Group links (text file)"
+            )
+        else:
+            await update.message.reply_text(f"```\n{links_only}\n```", parse_mode='Markdown')
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard button presses"""
@@ -1566,7 +2095,8 @@ class QuizBot:
                 "📢 **Important:** I accept both anonymous and non-anonymous QUIZ MODE polls\n"
                 "📢 **Important:** When sent to groups, quizzes will ALWAYS be NON-ANONYMOUS (voters visible)\n\n"
                 "I'll automatically save it and send it to groups!\n\n"
-                "💡 Group admins can use /rquiz for immediate quizzes"
+                "💡 Group admins can use /rquiz for immediate quizzes\n"
+                "⚠️ Users can report quizzes with /qreport"
             )
         elif data == "settings":
             await self.show_settings(update, context)
@@ -1594,20 +2124,37 @@ class QuizBot:
             await self.reactivate_all_groups(update, context)
         elif data == "refresh_groups":
             await self.refresh_groups(update, context)
-        elif data == "manage_sudo":
-            await self.manage_sudo_users(update, context)
-        elif data == "add_sudo":
-            await self.add_sudo_callback(update, context)
-        elif data == "remove_sudo":
-            await self.remove_sudo_callback(update, context)
-        elif data.startswith("remove_sudo_"):
-            await self.confirm_remove_sudo(update, context)
+        elif data == "get_group_links":
+            await self.export_group_links(update, context)
         elif data.startswith("remove_group_"):
             chat_id = int(data.split("_")[2])
             await self.remove_group(update, context, chat_id)
         elif data.startswith("group_stats_"):
             chat_id = int(data.split("_")[2])
             await self.show_group_stats(update, context, chat_id)
+        elif data.startswith("delete_quiz_"):
+            report_id = data[12:]  # Remove "delete_quiz_" prefix
+            await self.handle_delete_quiz(update, context, report_id)
+        elif data.startswith("delete_similar_"):
+            report_id = data[15:]  # Remove "delete_similar_" prefix
+            await self.handle_delete_similar_quizzes(update, context, report_id)
+        elif data.startswith("ignore_report_"):
+            report_id = data[14:]  # Remove "ignore_report_" prefix
+            await self.handle_ignore_report(update, context, report_id)
+        elif data.startswith("view_similar_"):
+            report_id = data[13:]  # Remove "view_similar_" prefix
+            await self.handle_view_similar(update, context, report_id)
+        elif data == "view_reports":
+            await self.handle_view_reports(update, context)
+        elif data == "clear_resolved_reports":
+            await self.handle_clear_resolved_reports(update, context)
+        elif data.startswith("report_back_"):
+            report_id = data[12:]  # Remove "report_back_" prefix
+            await self.handle_report_back(update, context, report_id)
+        elif data == "close_report":
+            await self.handle_close_report(update, context)
+        elif data == "start_menu":
+            await self.handle_start_menu(update, context)
     
     async def remove_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         """Remove a group from the list"""
@@ -1661,8 +2208,12 @@ class QuizBot:
         self.application.add_handler(CommandHandler("setexplanation", self.set_explanation_command))
         self.application.add_handler(CommandHandler("rquiz", self.send_immediate_quiz))
         self.application.add_handler(CommandHandler("reset", self.reset_quizzes_command))
-        self.application.add_handler(CommandHandler("sudo", self.sudo_command))
-        self.application.add_handler(CommandHandler("unsudo", self.unsudo_command))
+        self.application.add_handler(CommandHandler("qreport", self.report_quiz_command))
+        
+        # Add new group list commands
+        self.application.add_handler(CommandHandler("grouplist", self.list_groups_with_links))
+        self.application.add_handler(CommandHandler("groupslist", self.quick_groups_list))  # Alternative command
+        self.application.add_handler(CommandHandler("grouplinks", self.export_group_links))
         
         # Handle both text messages and polls
         self.application.add_handler(MessageHandler(
@@ -1701,13 +2252,16 @@ class QuizBot:
         print(f"✅ Bot is now running with MongoDB support!")
         print(f"⏰ Quiz interval: {quiz_interval_hours} hours")
         print(f"📊 Loaded {len(self.quizzes)} quizzes and {len(self.groups)} groups from database")
-        print(f"👑 Loaded {len(self.sudo_users)} sudo users from database")
         print(f"🎯 /rquiz command enabled for group admins")
-        print(f"🔄 /reset command available for admin/sudo")
-        print(f"👑 /sudo and /unsudo commands available for admin only")
+        print(f"🔄 /reset command available for admin")
+        print(f"👥 NEW: /grouplist command for detailed group list with invite links")
+        print(f"👥 NEW: /groupslist command for quick group overview")
+        print(f"👥 NEW: /grouplinks command for links export")
+        print(f"⚠️ NEW: /qreport command for users to report quizzes")
         print(f"🔄 IMPROVED Anti-repeat system active: Tracks last {self.max_recent_track} sent quizzes")
         print(f"👤 Quiz acceptance: Both anonymous and non-anonymous QUIZ MODE polls accepted")
         print(f"📤 Quiz sending: ALWAYS sends as NON-ANONYMOUS (voters visible)")
+        print(f"👮 Quiz moderation system active - reports go to admin DM")
         
         # Keep the bot running
         while True:
