@@ -46,6 +46,7 @@ class MongoDB:
             try:
                 quizzes_col = self.db['quizzes']
                 quizzes_col.create_index([('subject', 1), ('folder', 1), ('is_active', 1)])
+                quizzes_col.create_index([('subject', 1), ('folder', 1), ('subfolder', 1), ('is_active', 1)])
                 quizzes_col.create_index([('is_active', 1)])
                 print("✅ Database indexes ensured (subject, folder, is_active)")
             except Exception as idx_error:
@@ -166,6 +167,8 @@ class QuizBot:
         # Keeps callback_data short (Telegram 64-byte limit) even for long names
         self.subject_tokens = {}
         self.pair_tokens = {}
+        # NEW: token -> (subject, folder, subfolder) — subfolder='' means "no sub-folder / all"
+        self.qz_ctx_tokens = {}
     
     # ==========================================================
     # NEW: HIERARCHICAL QUIZ HELPERS (Subject → Folder → Questions)
@@ -187,11 +190,18 @@ class QuizBot:
                 {'folder': {'$exists': False}},
                 {'$set': {'folder': 'Uncategorized'}}
             )
+            # NEW: sub-folder support — old quizzes get an empty subfolder (= "no sub-folder")
+            result3 = collection.update_many(
+                {'subfolder': {'$exists': False}},
+                {'$set': {'subfolder': ''}}
+            )
             migrated = 0
             if result1 is not None:
                 migrated += result1.modified_count
             if result2 is not None:
                 migrated += result2.modified_count
+            if result3 is not None:
+                migrated += result3.modified_count
             if migrated:
                 print(f"🔄 Migrated {migrated} old quiz(es) → General / Uncategorized")
             else:
@@ -239,6 +249,28 @@ class QuizBot:
             print(f"⚠️ Pair token map rebuild failed: {e}")
         return self.pair_tokens.get(token)
     
+    def register_qz_ctx(self, subject, folder, subfolder=''):
+        """NEW: Register and return a short token for a (subject, folder, subfolder) context.
+        subfolder='' means 'no sub-folder / all questions in the folder'."""
+        subfolder = subfolder or ''
+        token = self.make_token(f"ctx::{subject}::{folder}::{subfolder}")
+        self.qz_ctx_tokens[token] = (subject, folder, subfolder)
+        return token
+
+    def resolve_qz_ctx(self, token):
+        """NEW: Resolve a qz_ctx token back to (subject, folder, subfolder); rebuilds map from DB if needed"""
+        if token in self.qz_ctx_tokens:
+            return self.qz_ctx_tokens[token]
+        try:
+            for subject in self.get_subjects():
+                for folder in self.get_folders(subject):
+                    self.register_qz_ctx(subject, folder, '')
+                    for sf in self.get_subfolders(subject, folder):
+                        self.register_qz_ctx(subject, folder, sf)
+        except Exception as e:
+            print(f"⚠️ Quiz-context token map rebuild failed: {e}")
+        return self.qz_ctx_tokens.get(token)
+
     def get_subjects(self):
         """Get all distinct subject names (sorted)"""
         try:
@@ -254,6 +286,15 @@ class QuizBot:
         except Exception:
             folders = []
         return sorted([f for f in folders if f])
+    
+    def get_subfolders(self, subject, folder):
+        """NEW: Get all distinct sub-folder names inside a subject/folder (sorted).
+        Quizzes saved directly in the folder (no sub-folder) are excluded here."""
+        try:
+            subfolders = self.mongo.distinct('quizzes', 'subfolder', {'subject': subject, 'folder': folder})
+        except Exception:
+            subfolders = []
+        return sorted([s for s in subfolders if s])
     
     def get_structure(self):
         """Return {'subjects': {name: quiz_count}, 'folders': {subject: {folder: count}}}
@@ -288,25 +329,35 @@ class QuizBot:
         except Exception:
             return None
     
-    def set_admin_selection(self, context, subject, folder):
-        """Save the admin's selected subject/folder for quiz-saving mode"""
-        context.user_data['add_state'] = {'subject': subject, 'folder': folder, 'saved_count': 0}
+    def set_admin_selection(self, context, subject, folder, subfolder=''):
+        """Save the admin's selected subject/folder(/sub-folder) for quiz-saving mode"""
+        context.user_data['add_state'] = {
+            'subject': subject, 'folder': folder, 'subfolder': subfolder or '', 'saved_count': 0
+        }
     
     def clear_admin_selection(self, context):
         """Clear the admin's selected subject/folder"""
         context.user_data['add_state'] = None
     
-    def start_quiz_session(self, context, subject, folder):
+    def start_quiz_session(self, context, subject, folder, subfolder='', limit=None, timer_seconds=0):
         """Create a shuffled per-user quiz session.
-        Returns the session dict, or None if the folder has no active questions."""
-        quizzes = self.get_quizzes_by(subject, folder)
+        subfolder='' means all questions in the folder (any/no sub-folder).
+        limit caps the number of questions; timer_seconds sets the per-question time limit.
+        Returns the session dict, or None if there are no matching active questions."""
+        query = {'subject': subject, 'folder': folder, 'is_active': True}
+        if subfolder:
+            query['subfolder'] = subfolder
+        quizzes = self.mongo.find('quizzes', query)
         if not quizzes:
             return None
         ids = [str(q['_id']) for q in quizzes]
         random.shuffle(ids)
+        if limit and limit > 0:
+            ids = ids[:limit]
         session = {
             'subject': subject,
             'folder': folder,
+            'subfolder': subfolder or '',   # NEW
             'remaining_quiz_ids': ids,
             'total_questions': len(ids),
             'current_question': 0,
@@ -314,6 +365,7 @@ class QuizBot:
             'answered': 0,       # NEW: questions the user has answered
             'last_poll_id': None,       # NEW: poll id of the question on screen
             'last_correct_option_id': None,  # NEW: to grade the answer
+            'timer_seconds': timer_seconds or 0,   # NEW: per-question time limit (0 = no limit)
         }
         context.user_data['quiz_session'] = session
         self.stats['user_quiz_sessions'] = self.stats.get('user_quiz_sessions', 0) + 1
@@ -369,20 +421,85 @@ class QuizBot:
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qz_back_subjects")])
         return text, keyboard
     
-    def build_user_folder_start(self, subject, folder):
-        """(text, keyboard) for the user's 'Start Quiz' screen"""
-        count = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'is_active': True})
-        token = self.register_pair_token(subject, folder)
+    def build_user_subfolder_menu(self, subject, folder):
+        """NEW: (text, keyboard) for the user's sub-folder selection screen (only shown when
+        the folder actually has sub-folders)"""
+        subfolders = self.get_subfolders(subject, folder)
+        total = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'is_active': True})
+        text = (f"📂 {folder} ({subject})\n\n"
+                f"This quiz folder has sub-folders. Pick one, or play everything in the folder:")
+        keyboard = []
+        for name in subfolders:
+            cnt = self.mongo.count_documents(
+                'quizzes', {'subject': subject, 'folder': folder, 'subfolder': name, 'is_active': True})
+            token = self.register_qz_ctx(subject, folder, name)
+            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"qz_subf_{token}")])
+        all_token = self.register_qz_ctx(subject, folder, '')
+        keyboard.append([InlineKeyboardButton(f"📄 All Questions in Folder ({total})", callback_data=f"qz_subf_{all_token}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qz_back_folders")])
+        return text, keyboard
+    
+    def build_user_folder_start(self, subject, folder, subfolder=''):
+        """(text, keyboard) for the user's 'Start Quiz' confirm screen"""
+        query = {'subject': subject, 'folder': folder, 'is_active': True}
+        if subfolder:
+            query['subfolder'] = subfolder
+        count = self.mongo.count_documents('quizzes', query)
+        token = self.register_qz_ctx(subject, folder, subfolder)
+        label = f"{folder} → 📂 {subfolder}" if subfolder else folder
         text = (f"🎯 Quiz Selected\n\n"
                 f"📚 Subject: {subject}\n"
-                f"📁 Quiz Folder: {folder}\n"
-                f"📝 Questions: {count}\n\n"
+                f"📁 Quiz Folder: {label}\n"
+                f"📝 Questions available: {count}\n\n"
                 f"Questions will be sent in random order.\n"
                 f"Each question appears only once per session.")
         keyboard = [
-            [InlineKeyboardButton("▶️ Start Quiz", callback_data=f"qz_start_{token}")],
+            [InlineKeyboardButton("▶️ Start Quiz", callback_data=f"qz_pickcount_{token}")],
             [InlineKeyboardButton("🔙 Back", callback_data="qz_back_folders")]
         ]
+        return text, keyboard
+    
+    def build_quiz_count_menu(self, subject, folder, subfolder, ctx_token):
+        """NEW: (text, keyboard) asking how many questions the user wants."""
+        query = {'subject': subject, 'folder': folder, 'is_active': True}
+        if subfolder:
+            query['subfolder'] = subfolder
+        total = self.mongo.count_documents('quizzes', query)
+        label = f"{folder} → 📂 {subfolder}" if subfolder else folder
+        text = (f"❓ How many questions do you want?\n\n"
+                f"📚 Subject: {subject}\n📁 {label}\n📝 Available: {total} question(s)\n\n"
+                f"Choose an option below (or send a custom number):")
+        keyboard = []
+        row = []
+        for preset in (10, 20, 50, 100):
+            if preset < total:
+                row.append(InlineKeyboardButton(str(preset), callback_data=f"qz_cnt_{ctx_token}_{preset}"))
+                if len(row) == 3:
+                    keyboard.append(row)
+                    row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qz_cnt_{ctx_token}_{total}")])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qz_cntcustom_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qz_subf_{ctx_token}")])
+        return text, keyboard
+    
+    def build_quiz_timer_menu(self, ctx_token, count):
+        """NEW: (text, keyboard) asking for the per-question time limit."""
+        text = (f"⏱ Set a Timer\n\n"
+                f"📝 Questions selected: {count}\n\n"
+                f"Choose how much time you get per question:")
+        keyboard = []
+        row = []
+        for secs, label in ((10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (45, "45 sec"), (60, "1 min")):
+            row.append(InlineKeyboardButton(label, callback_data=f"qz_tmr_{ctx_token}_{count}_{secs}"))
+            if len(row) == 3:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qz_tmrcustom_{ctx_token}_{count}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qz_pickcount_{ctx_token}")])
         return text, keyboard
     
     def build_admin_subject_menu(self):
@@ -416,6 +533,24 @@ class QuizBot:
             token = self.register_pair_token(subject, name)
             keyboard.append([InlineKeyboardButton(f"📁 {name} ({folders[name]})", callback_data=f"addquiz_fold_{token}")])
         keyboard.append([InlineKeyboardButton("➕ Create New Quiz Folder", callback_data="addquiz_newfold")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="addquiz_backsubj")])
+        return text, keyboard
+    
+    def build_admin_subfolder_menu(self, subject, folder):
+        """NEW: (text, keyboard) for the admin 'Add Quiz — Step 3: Sub-folder (optional)' screen"""
+        subfolders = self.get_subfolders(subject, folder)
+        text = (f"📂 Add Quiz — Step 3: Sub-folder (optional)\n\n"
+                f"📚 Subject: {subject}\n📁 Quiz Folder: {folder}\n\n"
+                f"Pick an existing sub-folder, add directly to this folder, "
+                f"or create a new sub-folder:")
+        keyboard = []
+        for name in subfolders:
+            cnt = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'subfolder': name})
+            token = self.register_qz_ctx(subject, folder, name)
+            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"addquiz_subf_{token}")])
+        root_token = self.register_pair_token(subject, folder)
+        keyboard.append([InlineKeyboardButton("📄 Add Directly to This Folder", callback_data=f"addquiz_nosubf_{root_token}")])
+        keyboard.append([InlineKeyboardButton("➕ Create New Sub-folder", callback_data=f"addquiz_newsubf_{root_token}")])
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="addquiz_backsubj")])
         return text, keyboard
     
@@ -725,6 +860,12 @@ class QuizBot:
         """Handle private messages from admin"""
         user_id = update.effective_user.id
         
+        # NEW: quiz custom-count / custom-timer text input is available to ANY user
+        # (not just admin) since /quiz is open to everyone.
+        if context.user_data.get('await') in ('quiz_custom_count', 'quiz_custom_timer'):
+            await self.handle_quiz_custom_input(update, context)
+            return
+        
         if not self.is_admin(user_id):
             await update.message.reply_text("I only accept commands from the admin.")
             return
@@ -748,8 +889,10 @@ class QuizBot:
         if update.message.poll:
             add_state = context.user_data.get('add_state') or {}
             if add_state.get('subject') and add_state.get('folder'):
-                # Quiz-saving mode active → save under the selected subject/folder
-                await self.save_poll_quiz(update, context, update.message.poll, add_state['subject'], add_state['folder'])
+                # Quiz-saving mode active → save under the selected subject/folder(/sub-folder)
+                await self.save_poll_quiz(
+                    update, context, update.message.poll,
+                    add_state['subject'], add_state['folder'], add_state.get('subfolder', ''))
             else:
                 # No location selected → do NOT silently save; guide the admin
                 await update.message.reply_text(
@@ -779,8 +922,8 @@ class QuizBot:
             "4. Send it to me"
         )
     
-    async def save_poll_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE, poll, subject, folder):
-        """Save a poll as a quiz under the selected subject/folder.
+    async def save_poll_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE, poll, subject, folder, subfolder=''):
+        """Save a poll as a quiz under the selected subject/folder(/sub-folder).
         Accepts BOTH anonymous and non-anonymous QUIZ MODE polls."""
         # Check if it's a quiz mode poll (has correct_option_id)
         if poll.correct_option_id is None:
@@ -799,6 +942,7 @@ class QuizBot:
             'type': 'quiz',
             'subject': subject,
             'folder': folder,
+            'subfolder': subfolder or '',
             'question': poll.question,
             'options': [option.text for option in poll.options],
             'is_anonymous': poll.is_anonymous,  # Keep original setting for reference
@@ -826,15 +970,16 @@ class QuizBot:
         
         correct_answer = quiz['options'][quiz['correct_option_id']]
         folder_count = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder})
+        folder_label = f"{folder} → 📂 {subfolder}" if subfolder else folder
         
         await update.message.reply_text(
             f"✅ Quiz Saved!\n\n"
             f"📚 Subject: {subject}\n"
-            f"📁 Quiz Folder: {folder}\n\n"
+            f"📁 Quiz Folder: {folder_label}\n\n"
             f"📝 Question: {quiz['question']}\n"
             f"✅ Correct Answer: {correct_answer}\n\n"
             f"📊 Saved this session: {add_state['saved_count']}\n"
-            f"📁 Questions in this folder: {folder_count}\n"
+            f"📁 Questions in this folder (total): {folder_count}\n"
             f"📊 Total quizzes: {len(self.quizzes)}\n\n"
             f"➡️ Keep sending Quiz Mode polls, or send /done to finish.\n"
             f"💡 Group admins can use /rquiz to send immediate quizzes!\n"
@@ -1084,7 +1229,8 @@ class QuizBot:
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def handle_qz_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token):
-        """User tapped a quiz folder in /quiz browsing"""
+        """User tapped a quiz folder in /quiz browsing.
+        NEW: if the folder has sub-folders, show the sub-folder picker first."""
         query = update.callback_query
         pair = self.resolve_pair_token(token)
         if not pair:
@@ -1095,38 +1241,181 @@ class QuizBot:
             return
         subject, folder = pair
         context.user_data['quiz_browse_subject'] = subject
-        text, keyboard = self.build_user_folder_start(subject, folder)
+        context.user_data['quiz_browse_folder'] = folder
+        subfolders = self.get_subfolders(subject, folder)
+        if subfolders:
+            text, keyboard = self.build_user_subfolder_menu(subject, folder)
+        else:
+            text, keyboard = self.build_user_folder_start(subject, folder, '')
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
-    async def handle_qz_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token):
-        """User tapped Start Quiz — create a shuffled session and send the first question"""
+    async def handle_qz_subfolder(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token):
+        """NEW: User picked a specific sub-folder (or 'All Questions in Folder') — show the confirm screen"""
         query = update.callback_query
-        pair = self.resolve_pair_token(token)
-        if not pair:
+        triple = self.resolve_qz_ctx(token)
+        if not triple:
             text, keyboard = self.build_user_subject_menu()
             await query.edit_message_text(
                 "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
                 reply_markup=InlineKeyboardMarkup(keyboard))
             return
-        subject, folder = pair
-        session = self.start_quiz_session(context, subject, folder)
-        if not session:
+        subject, folder, subfolder = triple
+        context.user_data['quiz_browse_subject'] = subject
+        text, keyboard = self.build_user_folder_start(subject, folder, subfolder)
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def handle_qz_pickcount(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token):
+        """NEW: User tapped 'Start Quiz' — ask how many questions they want"""
+        query = update.callback_query
+        triple = self.resolve_qz_ctx(token)
+        if not triple:
+            text, keyboard = self.build_user_subject_menu()
             await query.edit_message_text(
-                f"😔 No quiz questions in this folder yet. Please check back later!\n\n"
-                f"📚 Subject: {subject}\n📁 Quiz Folder: {folder}",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders")],
-                    [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
-                ]))
+                "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                reply_markup=InlineKeyboardMarkup(keyboard))
             return
+        subject, folder, subfolder = triple
+        text, keyboard = self.build_quiz_count_menu(subject, folder, subfolder, token)
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def handle_qz_count_custom(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token):
+        """NEW: User tapped 'Custom Number' for question count — ask them to type it"""
+        query = update.callback_query
+        triple = self.resolve_qz_ctx(token)
+        if not triple:
+            text, keyboard = self.build_user_subject_menu()
+            await query.edit_message_text(
+                "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        subject, folder, subfolder = triple
+        query_filter = {'subject': subject, 'folder': folder, 'is_active': True}
+        if subfolder:
+            query_filter['subfolder'] = subfolder
+        total = self.mongo.count_documents('quizzes', query_filter)
+        context.user_data['await'] = 'quiz_custom_count'
+        context.user_data['quiz_ctx_token'] = token
         await query.edit_message_text(
-            f"▶️ Starting: {folder}\n"
-            f"📚 {subject}\n"
-            f"📝 {session['total_questions']} questions • Random order\n\n"
+            f"✏️ Send the number of questions you want (1-{total}).")
+    
+    async def handle_qz_count_chosen(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token, count):
+        """NEW: User picked a preset question count — ask for the timer next"""
+        query = update.callback_query
+        triple = self.resolve_qz_ctx(token)
+        if not triple:
+            text, keyboard = self.build_user_subject_menu()
+            await query.edit_message_text(
+                "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        text, keyboard = self.build_quiz_timer_menu(token, count)
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def handle_qz_timer_custom(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token, count):
+        """NEW: User tapped 'Custom Timer' — ask them to type the number of seconds"""
+        query = update.callback_query
+        triple = self.resolve_qz_ctx(token)
+        if not triple:
+            text, keyboard = self.build_user_subject_menu()
+            await query.edit_message_text(
+                "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        context.user_data['await'] = 'quiz_custom_timer'
+        context.user_data['quiz_ctx_token'] = token
+        context.user_data['quiz_setup_count'] = count
+        await query.edit_message_text(
+            "✏️ Send the time limit per question, in seconds (5-600).")
+    
+    async def handle_qz_timer_chosen(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token, count, secs):
+        """NEW: User picked a preset timer — launch the quiz"""
+        query = update.callback_query
+        triple = self.resolve_qz_ctx(token)
+        if not triple:
+            text, keyboard = self.build_user_subject_menu()
+            await query.edit_message_text(
+                "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        subject, folder, subfolder = triple
+        await self.launch_quiz_session(context, query.message.chat_id, subject, folder, subfolder, count, secs, edit_query=query)
+    
+    async def handle_quiz_custom_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """NEW: Handle free-text custom question-count / custom timer replies (any user)"""
+        state = context.user_data.get('await')
+        text = (update.message.text or '').strip()
+        
+        if state == 'quiz_custom_count':
+            token = context.user_data.get('quiz_ctx_token')
+            triple = self.resolve_qz_ctx(token) if token else None
+            if not triple:
+                context.user_data['await'] = None
+                await update.message.reply_text("⚠️ Session expired. Please use /quiz to start again.")
+                return
+            subject, folder, subfolder = triple
+            query_filter = {'subject': subject, 'folder': folder, 'is_active': True}
+            if subfolder:
+                query_filter['subfolder'] = subfolder
+            total = self.mongo.count_documents('quizzes', query_filter)
+            if not text.isdigit() or int(text) <= 0:
+                await update.message.reply_text(f"❌ Please send a valid positive number (1-{total}).")
+                return
+            count = min(int(text), total)
+            context.user_data['await'] = None
+            out_text, keyboard = self.build_quiz_timer_menu(token, count)
+            await update.message.reply_text(out_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        elif state == 'quiz_custom_timer':
+            token = context.user_data.get('quiz_ctx_token')
+            count = context.user_data.get('quiz_setup_count')
+            triple = self.resolve_qz_ctx(token) if token else None
+            if not triple or count is None:
+                context.user_data['await'] = None
+                await update.message.reply_text("⚠️ Session expired. Please use /quiz to start again.")
+                return
+            if not text.isdigit() or not (5 <= int(text) <= 600):
+                await update.message.reply_text("❌ Please send a valid number of seconds (5-600).")
+                return
+            secs = int(text)
+            context.user_data['await'] = None
+            subject, folder, subfolder = triple
+            await self.launch_quiz_session(context, update.effective_chat.id, subject, folder, subfolder, count, secs)
+        
+        else:
+            context.user_data['await'] = None
+    
+    async def launch_quiz_session(self, context: ContextTypes.DEFAULT_TYPE, chat_id, subject, folder, subfolder, count, secs, edit_query=None):
+        """NEW: Create the session (with count limit + timer) and send the first question"""
+        session = self.start_quiz_session(context, subject, folder, subfolder, count, secs)
+        if not session:
+            label = f"{folder} → 📂 {subfolder}" if subfolder else folder
+            text = (f"😔 No quiz questions here yet. Please check back later!\n\n"
+                    f"📚 Subject: {subject}\n📁 Quiz Folder: {label}")
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders")],
+                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+            ])
+            if edit_query:
+                await edit_query.edit_message_text(text, reply_markup=keyboard)
+            else:
+                await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+            return
+        
+        label = f"{folder} → 📂 {subfolder}" if subfolder else folder
+        timer_label = "1 min" if secs == 60 else f"{secs} sec"
+        intro = (
+            f"▶️ Starting Quiz!\n\n"
+            f"📚 {subject}\n📁 {label}\n"
+            f"📝 {session['total_questions']} question(s) • ⏱ {timer_label} per question • Random order\n\n"
             f"Answer each poll — the next question comes automatically!\n"
             f"Send /stop anytime to end the quiz and see your score.\n\n"
-            f"Good luck! 🍀")
-        await self.send_session_question(context, query.message.chat_id)
+            f"Good luck! 🍀"
+        )
+        if edit_query:
+            await edit_query.edit_message_text(intro)
+        else:
+            await context.bot.send_message(chat_id, intro)
+        await self.send_session_question(context, chat_id)
     
     async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """NEW: Grade the user's answer, then AUTOMATICALLY send the next question.
@@ -1147,6 +1436,9 @@ class QuizBot:
             session['score'] = session.get('score', 0) + 1
             self.stats['user_quiz_correct'] = self.stats.get('user_quiz_correct', 0) + 1
         self.save_stats()
+        
+        # NEW: mark this poll as handled so a pending timeout task (if any) skips it
+        session['last_poll_id'] = None
         
         chat_id = pa.user.id
         
@@ -1170,10 +1462,15 @@ class QuizBot:
         answered = session.get('answered', 0)
         score = session.get('score', 0)
         title = "🛑 Quiz Stopped!" if stopped else "🎉 Quiz Completed!"
+        subfolder = session.get('subfolder')
+        folder_label = f"{session.get('folder')} → 📂 {subfolder}" if subfolder else session.get('folder')
+        timer = session.get('timer_seconds', 0)
+        timer_label = ("1 min" if timer == 60 else f"{timer} sec") if timer else "No limit"
         text = (
             f"{title}\n\n"
             f"📚 Subject: {session.get('subject')}\n"
-            f"📁 Quiz Folder: {session.get('folder')}\n\n"
+            f"📁 Quiz Folder: {folder_label}\n"
+            f"⏱ Timer: {timer_label} per question\n\n"
             f"🏆 Your Score: {score}/{answered}\n"
             f"📝 Questions: {answered}/{total} attempted\n"
         )
@@ -1218,22 +1515,11 @@ class QuizBot:
                 "⚠️ No quiz session found — browse again below.\n\n" + text,
                 reply_markup=InlineKeyboardMarkup(keyboard))
             return
-        new_session = self.start_quiz_session(context, session['subject'], session['folder'])
-        if not new_session:
-            await query.edit_message_text(
-                f"😔 No active questions left in this folder.\n"
-                f"📚 {session['subject']} → 📁 {session['folder']}",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders")],
-                    [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
-                ]))
-            return
-        await query.edit_message_text(
-            f"🔄 Quiz Restarted!\n\n"
-            f"📚 {session['subject']} → 📁 {session['folder']}\n"
-            f"📝 {new_session['total_questions']} questions (reshuffled)\n\n"
-            f"Good luck! 🍀")
-        await self.send_session_question(context, query.message.chat_id)
+        await self.launch_quiz_session(
+            context, query.message.chat_id,
+            session['subject'], session['folder'], session.get('subfolder', ''),
+            session.get('total_questions'), session.get('timer_seconds', 0),
+            edit_query=query)
     
     async def send_session_question(self, context: ContextTypes.DEFAULT_TYPE, chat_id):
         """Send the next question of the active user quiz session (or completion)"""
@@ -1253,6 +1539,9 @@ class QuizBot:
         base_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
         explanation = f"📊 {progress} • 📚 {session['subject']} • 📁 {session['folder']}\n\n{base_explanation}"[:200]
         
+        # NEW: use the per-question timer chosen at quiz setup (0 = no limit)
+        timer_seconds = session.get('timer_seconds', 0) or 0
+        
         message = await context.bot.send_poll(
             chat_id=chat_id,
             question=f"❓ {quiz['question']}",
@@ -1262,7 +1551,7 @@ class QuizBot:
             type=Poll.QUIZ,
             correct_option_id=quiz['correct_option_id'],
             explanation=explanation,
-            open_period=0,
+            open_period=timer_seconds if timer_seconds > 0 else 0,
             protect_content=False
         )
         
@@ -1271,6 +1560,29 @@ class QuizBot:
         session['last_poll_id'] = message.poll.id
         session['last_correct_option_id'] = quiz['correct_option_id']
         session['last_options'] = quiz['options']
+        
+        # NEW: if there's a timer, auto-advance when it runs out and the user didn't answer
+        if timer_seconds > 0:
+            asyncio.create_task(
+                self._auto_advance_on_timeout(context, chat_id, message.poll.id, timer_seconds))
+    
+    async def _auto_advance_on_timeout(self, context: ContextTypes.DEFAULT_TYPE, chat_id, poll_id, delay):
+        """NEW: If the user hasn't answered by the time the poll's open_period ends,
+        count it as attempted (wrong) and automatically move to the next question."""
+        await asyncio.sleep(delay + 2)  # small buffer so Telegram has closed the poll
+        session = context.user_data.get('quiz_session')
+        if not session or session.get('completed'):
+            return
+        if session.get('last_poll_id') != poll_id:
+            return  # already answered (or already advanced)
+        session['answered'] = session.get('answered', 0) + 1
+        session['last_poll_id'] = None
+        self.save_stats()
+        try:
+            await context.bot.send_message(chat_id, "⏰ Time's up!\n\n➡️ Next question...")
+        except Exception as e:
+            print(f"⚠️ Could not send timeout message: {e}")
+        await self.send_session_question(context, chat_id)
     
     async def send_session_complete(self, context: ContextTypes.DEFAULT_TYPE, chat_id, session):
         """Send the completion screen (with score) after all questions were answered"""
@@ -1293,12 +1605,14 @@ class QuizBot:
         add_state = context.user_data.get('add_state') or {}
         subject = add_state.get('subject')
         folder = add_state.get('folder')
+        subfolder = add_state.get('subfolder', '')
+        folder_label = f"{folder} → 📂 {subfolder}" if subfolder else folder
         
         text = (
             f"✅ Quiz-Saving Mode Activated!\n\n"
             f"Now send Quiz Mode polls. All quizzes you send will be saved under:\n\n"
             f"📚 Subject: {subject}\n"
-            f"📁 Quiz Folder: {folder}\n\n"
+            f"📁 Quiz Folder: {folder_label}\n\n"
             f"Send as many Quiz Mode polls as you want.\n"
             f"Finish with /done or the button below.\n\n"
             f"💡 Quiz Mode poll: 📎 → Poll → question & options → ✅ Quiz Mode → set correct answer → send"
@@ -1391,6 +1705,17 @@ class QuizBot:
             context.user_data['add_state'] = {'subject': subject, 'folder': name, 'saved_count': 0}
             await self.enter_adding_mode(update, context)
         
+        elif state == 'new_subfolder':
+            info = context.user_data.pop('new_subfolder_pair', {}) or {}
+            subject = info.get('subject')
+            folder = info.get('folder')
+            if not subject or not folder:
+                await update.message.reply_text(
+                    "❌ No quiz folder selected. Start again from 📝 Add Quiz.")
+                return
+            self.set_admin_selection(context, subject, folder, name)
+            await self.enter_adding_mode(update, context)
+        
         elif state == 'rename_subject':
             target = context.user_data.pop('rename_target', {}) or {}
             old = target.get('subject')
@@ -1448,7 +1773,7 @@ class QuizBot:
             f"📚 Subjects: {total_subjects}\n"
             f"📁 Quiz Folders: {total_folders}\n"
             f"📝 Quiz Questions: {total_quizzes}\n\n"
-            f"Quizzes are organized as: Subject → Quiz Folder → Questions"
+            f"Quizzes are organized as: Subject → Quiz Folder → Sub-folder (optional) → Questions"
         )
         if notice:
             text = notice + "\n\n" + text
@@ -1512,9 +1837,11 @@ class QuizBot:
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def show_manage_folder_detail(self, update: Update, context: ContextTypes.DEFAULT_TYPE, subject, folder):
-        """Show details and actions for one quiz folder"""
+        """Show details and actions for one quiz folder (incl. its sub-folders)"""
         query = update.callback_query
         count = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder})
+        root_count = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'subfolder': ''})
+        subfolders = self.get_subfolders(subject, folder)
         pair_token = self.register_pair_token(subject, folder)
         subject_token = self.register_subject_token(subject)
         
@@ -1522,13 +1849,40 @@ class QuizBot:
             f"📁 Quiz Folder Details\n\n"
             f"📚 Subject: {subject}\n"
             f"📁 Folder: {folder}\n"
+            f"📝 Questions inside (total): {count}\n"
+            f"📄 Directly in folder (no sub-folder): {root_count}\n"
+            f"📂 Sub-folders: {len(subfolders)}"
+        )
+        keyboard = []
+        for name in subfolders:
+            cnt = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'subfolder': name})
+            token = self.register_qz_ctx(subject, folder, name)
+            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"mf_subf_{token}")])
+        keyboard.append([InlineKeyboardButton("➕ Create Sub-folder", callback_data=f"mf_newsubf_{pair_token}")])
+        keyboard.append([InlineKeyboardButton("➕ Add Quizzes Here", callback_data=f"mf_addhere_{pair_token}")])
+        keyboard.append([InlineKeyboardButton("✏️ Rename Quiz Folder", callback_data=f"mf_renfold_{pair_token}")])
+        keyboard.append([InlineKeyboardButton("🗑️ Delete Quiz Folder", callback_data=f"mf_delfold_{pair_token}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"mf_subj_{subject_token}")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def show_manage_subfolder_detail(self, update: Update, context: ContextTypes.DEFAULT_TYPE, subject, folder, subfolder):
+        """NEW: Show details and actions for one sub-folder"""
+        query = update.callback_query
+        count = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'subfolder': subfolder})
+        ctx_token = self.register_qz_ctx(subject, folder, subfolder)
+        pair_token = self.register_pair_token(subject, folder)
+        
+        text = (
+            f"📂 Sub-folder Details\n\n"
+            f"📚 Subject: {subject}\n"
+            f"📁 Quiz Folder: {folder}\n"
+            f"📂 Sub-folder: {subfolder}\n"
             f"📝 Questions inside: {count}"
         )
         keyboard = [
-            [InlineKeyboardButton("➕ Add Quizzes Here", callback_data=f"mf_addhere_{pair_token}")],
-            [InlineKeyboardButton("✏️ Rename Quiz Folder", callback_data=f"mf_renfold_{pair_token}")],
-            [InlineKeyboardButton("🗑️ Delete Quiz Folder", callback_data=f"mf_delfold_{pair_token}")],
-            [InlineKeyboardButton("🔙 Back", callback_data=f"mf_subj_{subject_token}")]
+            [InlineKeyboardButton("➕ Add Quizzes Here", callback_data=f"mf_addheresubf_{ctx_token}")],
+            [InlineKeyboardButton("🗑️ Delete Sub-folder", callback_data=f"mf_delsubf_{ctx_token}")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"mf_fold_{pair_token}")]
         ]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
@@ -3429,6 +3783,77 @@ class QuizBot:
                 self.set_admin_selection(context, pair[0], pair[1])
                 await self.enter_adding_mode(update, context)
         # ==========================================================
+        # NEW: Manage Quiz Folders — sub-folder support
+        # ==========================================================
+        elif data.startswith("mf_subf_"):
+            token = data[8:]
+            triple = self.resolve_qz_ctx(token)
+            if not triple:
+                await self.show_manage_subjects(update, context, notice="⚠️ Button expired — list refreshed.")
+            else:
+                await self.show_manage_subfolder_detail(update, context, triple[0], triple[1], triple[2])
+        elif data.startswith("mf_newsubf_"):
+            token = data[11:]
+            pair = self.resolve_pair_token(token)
+            if not pair:
+                await self.show_manage_subjects(update, context, notice="⚠️ Button expired — list refreshed.")
+            else:
+                context.user_data['await'] = 'new_subfolder'
+                context.user_data['new_subfolder_pair'] = {'subject': pair[0], 'folder': pair[1]}
+                await query.edit_message_text(
+                    f"➕ Create Sub-folder\n\n"
+                    f"📚 Subject: {pair[0]}\n📁 Quiz Folder: {pair[1]}\n\n"
+                    f"Send the name of the new sub-folder now.\n\n"
+                    f"You'll be switched into quiz-saving mode for it right away."
+                )
+        elif data.startswith("mf_addheresubf_"):
+            token = data[15:]
+            triple = self.resolve_qz_ctx(token)
+            if not triple:
+                await self.show_manage_subjects(update, context, notice="⚠️ Button expired — list refreshed.")
+            else:
+                self.set_admin_selection(context, triple[0], triple[1], triple[2])
+                await self.enter_adding_mode(update, context)
+        elif data.startswith("mf_cdelsubf_"):
+            token = data[12:]
+            triple = self.resolve_qz_ctx(token)
+            if not triple:
+                await self.show_manage_subjects(update, context, notice="⚠️ Button expired — list refreshed.")
+            else:
+                subject, folder, subfolder = triple
+                result = self.mongo.delete_many('quizzes', {'subject': subject, 'folder': folder, 'subfolder': subfolder})
+                deleted = result.deleted_count if result else 0
+                self.quizzes = self.load_quizzes()
+                pair_token = self.register_pair_token(subject, folder)
+                await query.edit_message_text(
+                    f"✅ Sub-folder Deleted\n\n"
+                    f"📂 {subfolder}\n"
+                    f"🗑️ {deleted} quiz question(s) removed permanently.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📁 Back to Folder", callback_data=f"mf_fold_{pair_token}")],
+                        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+                    ])
+                )
+        elif data.startswith("mf_delsubf_"):
+            token = data[11:]
+            triple = self.resolve_qz_ctx(token)
+            if not triple:
+                await self.show_manage_subjects(update, context, notice="⚠️ Button expired — list refreshed.")
+            else:
+                subject, folder, subfolder = triple
+                count = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'subfolder': subfolder})
+                await query.edit_message_text(
+                    f"⚠️ Delete Sub-folder\n\n"
+                    f"📚 Subject: {subject}\n📁 Quiz Folder: {folder}\n📂 Sub-folder: {subfolder}\n"
+                    f"📝 Quizzes inside: {count}\n\n"
+                    f"Deleting this sub-folder will PERMANENTLY DELETE {count} quiz question(s).\n"
+                    f"This cannot be undone!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton(f"🗑️ Confirm Delete ({count} quizzes)", callback_data=f"mf_cdelsubf_{token}")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data=f"mf_subf_{token}")]
+                    ])
+                )
+        # ==========================================================
         # NEW: Admin Add Quiz flow (Subject → Folder → Polls → Done)
         # ==========================================================
         elif data == "addquiz_newsubj":
@@ -3476,8 +3901,47 @@ class QuizBot:
                     "⚠️ Button expired — list refreshed.\n\n" + text,
                     reply_markup=InlineKeyboardMarkup(keyboard))
             else:
-                self.set_admin_selection(context, pair[0], pair[1])
+                # NEW: sub-folder (optional) step before entering adding mode
+                text, keyboard = self.build_admin_subfolder_menu(pair[0], pair[1])
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("addquiz_subf_"):
+            token = data[13:]
+            triple = self.resolve_qz_ctx(token)
+            if not triple:
+                text, keyboard = self.build_admin_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Button expired — list refreshed.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                self.set_admin_selection(context, triple[0], triple[1], triple[2])
                 await self.enter_adding_mode(update, context)
+        elif data.startswith("addquiz_nosubf_"):
+            token = data[15:]
+            pair = self.resolve_pair_token(token)
+            if not pair:
+                text, keyboard = self.build_admin_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Button expired — list refreshed.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                self.set_admin_selection(context, pair[0], pair[1], '')
+                await self.enter_adding_mode(update, context)
+        elif data.startswith("addquiz_newsubf_"):
+            token = data[16:]
+            pair = self.resolve_pair_token(token)
+            if not pair:
+                text, keyboard = self.build_admin_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Button expired — list refreshed.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                context.user_data['await'] = 'new_subfolder'
+                context.user_data['new_subfolder_pair'] = {'subject': pair[0], 'folder': pair[1]}
+                await query.edit_message_text(
+                    f"➕ Create New Sub-folder\n\n"
+                    f"📚 Subject: {pair[0]}\n📁 Quiz Folder: {pair[1]}\n\n"
+                    f"Send the name of the new sub-folder now."
+                )
         elif data == "addquiz_done":
             await self.finish_adding(update, context)
         # ==========================================================
@@ -3487,8 +3951,28 @@ class QuizBot:
             await self.handle_qz_subject(update, context, data[8:])
         elif data.startswith("qz_fold_"):
             await self.handle_qz_folder(update, context, data[8:])
-        elif data.startswith("qz_start_"):
-            await self.handle_qz_start(update, context, data[9:])
+        elif data.startswith("qz_subf_"):
+            await self.handle_qz_subfolder(update, context, data[8:])
+        elif data.startswith("qz_pickcount_"):
+            await self.handle_qz_pickcount(update, context, data[13:])
+        elif data.startswith("qz_cntcustom_"):
+            await self.handle_qz_count_custom(update, context, data[13:])
+        elif data.startswith("qz_cnt_"):
+            # format: qz_cnt_<ctx_token>_<count>
+            body = data[len("qz_cnt_"):]
+            ctx_token, _, count_str = body.rpartition('_')
+            await self.handle_qz_count_chosen(update, context, ctx_token, int(count_str))
+        elif data.startswith("qz_tmrcustom_"):
+            # format: qz_tmrcustom_<ctx_token>_<count>
+            body = data[len("qz_tmrcustom_"):]
+            ctx_token, _, count_str = body.rpartition('_')
+            await self.handle_qz_timer_custom(update, context, ctx_token, int(count_str))
+        elif data.startswith("qz_tmr_"):
+            # format: qz_tmr_<ctx_token>_<count>_<secs>
+            body = data[len("qz_tmr_"):]
+            rest, _, secs_str = body.rpartition('_')
+            ctx_token, _, count_str = rest.rpartition('_')
+            await self.handle_qz_timer_chosen(update, context, ctx_token, int(count_str), int(secs_str))
         elif data == "qz_restart":
             await self.handle_qz_restart(update, context)
         elif data == "qz_back_subjects":
