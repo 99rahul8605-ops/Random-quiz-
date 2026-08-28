@@ -173,6 +173,12 @@ class QuizBot:
         self.multi_ctx_tokens = {}
         # NEW: token -> (subject1, subject2, ...) for multi-SUBJECT quiz selection
         self.subj_multi_ctx_tokens = {}
+        # NEW: token -> plain name (folder/sub-folder), used by the multi-subject → multi-chapter
+        # → multi-sub-folder flow, where names are a UNION across several subjects
+        self.name_tokens = {}
+        # NEW: token -> (subjects tuple, folders tuple-or-None, subfolders tuple-or-None) for the
+        # full multi-subject → multi-chapter → multi-sub-folder quiz selection
+        self.subjmulti_full_ctx_tokens = {}
     
     # ==========================================================
     # NEW: HIERARCHICAL QUIZ HELPERS (Subject → Folder → Questions)
@@ -297,6 +303,52 @@ class QuizBot:
     def resolve_subj_multi_ctx(self, token):
         """NEW: Resolve a subj-multi-ctx token back to a tuple of subject names."""
         return self.subj_multi_ctx_tokens.get(token)
+
+    def register_name_token(self, name):
+        """NEW: Register and return a short token for a plain name (folder/sub-folder),
+        used where names are a UNION across several subjects and aren't tied to one pair."""
+        token = self.make_token(f"name::{name}")
+        self.name_tokens[token] = name
+        return token
+
+    def resolve_name_token(self, token):
+        """NEW: Resolve a name token back to its plain string. Not DB-rebuildable
+        (arbitrary union), so if the bot restarted mid-flow the user just needs to reselect."""
+        return self.name_tokens.get(token)
+
+    def register_subjmulti_full_ctx(self, subjects, folders=None, subfolders=None):
+        """NEW: Register and return a short token for a full
+        (subjects..., folders...-or-None, subfolders...-or-None) selection."""
+        subjects = tuple(sorted(subjects))
+        folders = tuple(sorted(folders)) if folders else None
+        subfolders = tuple(sorted(subfolders)) if subfolders else None
+        token = self.make_token(
+            f"subjmultifull::{'|'.join(subjects)}::{'|'.join(folders or [])}::{'|'.join(subfolders or [])}")
+        self.subjmulti_full_ctx_tokens[token] = (subjects, folders, subfolders)
+        return token
+
+    def resolve_subjmulti_full_ctx(self, token):
+        """NEW: Resolve a full multi-subject/chapter/sub-folder ctx token back to
+        (subjects tuple, folders tuple-or-None, subfolders tuple-or-None)."""
+        return self.subjmulti_full_ctx_tokens.get(token)
+
+    def get_union_folders(self, subjects):
+        """NEW: {folder_name: total_count} across ALL of the given subjects."""
+        structure = self.get_structure()
+        counts = {}
+        for subj in subjects:
+            for name, cnt in structure['folders'].get(subj, {}).items():
+                counts[name] = counts.get(name, 0) + cnt
+        return counts
+
+    def get_union_subfolders(self, subjects, folders):
+        """NEW: Sorted list of distinct sub-folder names across every (subject, folder)
+        combination in the given subjects × folders."""
+        names = set()
+        for subj in subjects:
+            for folder in folders:
+                names.update(self.get_subfolders(subj, folder))
+        return sorted(names)
 
     def get_subjects(self):
         """Get all distinct subject names (sorted)"""
@@ -430,11 +482,17 @@ class QuizBot:
         self.save_stats()
         return session
     
-    def start_quiz_session_subjmulti(self, context, subjects, limit=None, timer_seconds=0):
+    def start_quiz_session_subjmulti(self, context, subjects, limit=None, timer_seconds=0, folders=None, subfolders=None):
         """NEW: Like start_quiz_session_multi, but pools questions from MULTIPLE SUBJECTS
         (every folder/chapter under each selected subject). Returns the session dict,
-        or None if nothing matches."""
+        or None if nothing matches.
+        folders/subfolders are OPTIONAL further narrowing (also picked via multi-select);
+        None/empty means "no filter on that level" (all chapters / all sub-folders)."""
         query = {'subject': {'$in': list(subjects)}, 'is_active': True}
+        if folders:
+            query['folder'] = {'$in': list(folders)}
+        if subfolders:
+            query['subfolder'] = {'$in': list(subfolders)}
         quizzes = self.mongo.find('quizzes', query)
         if not quizzes:
             return None
@@ -445,7 +503,8 @@ class QuizBot:
         session = {
             'subject': None,
             'folder': None,
-            'folders': None,
+            'folders': list(folders) if folders else None,        # NEW: optional chapter narrowing
+            'subfolders': list(subfolders) if subfolders else None,  # NEW: optional sub-folder narrowing
             'subjects': list(subjects),   # NEW: multiple subjects
             'is_multi': True,
             'is_subj_multi': True,        # NEW: flag used by shared session code
@@ -524,8 +583,121 @@ class QuizBot:
         keyboard.append(control_row)
         if selected:
             keyboard.append([InlineKeyboardButton(
-                f"▶️ Start Quiz ({n} selected)", callback_data="qzsm_start")])
+                f"➡️ Next ({n} selected)", callback_data="qzsm_start")])
         keyboard.append([InlineKeyboardButton("🔙 Single-Select Mode", callback_data="qz_back_subjects")])
+        return text, keyboard
+    
+    def build_subjmulti_chapter_menu(self, subjects, selected):
+        """NEW: (text, keyboard) for picking MULTIPLE chapters at once, across all of the
+        already-selected subjects (folder names are a UNION across those subjects)."""
+        folders = self.get_union_folders(subjects)
+        subj_label = ", ".join(subjects) if len(subjects) <= 3 else f"{len(subjects)} subjects selected"
+        n = len(selected)
+        if not folders:
+            text = (f"☑️ Select Multiple Chapters\n\n📚 Subjects: {subj_label}\n\n"
+                    f"😔 No chapters found under the selected subjects.")
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode")]]
+            return text, keyboard
+        text = (f"☑️ Select Multiple Chapters\n\n📚 Subjects: {subj_label}\n\n"
+                f"Tap chapters to select/unselect them. You can pick as many as you like.\n\n"
+                f"✅ Selected: {n}")
+        keyboard = []
+        for name in sorted(folders.keys()):
+            checkbox = "☑️" if name in selected else "⬜"
+            token = self.register_name_token(name)
+            keyboard.append([InlineKeyboardButton(
+                f"{checkbox} {name} ({folders[name]})", callback_data=f"qzsmch_tgl_{token}")])
+        control_row = [
+            InlineKeyboardButton("✅ Select All", callback_data="qzsmch_all"),
+            InlineKeyboardButton("◻️ Clear All", callback_data="qzsmch_clr")
+        ]
+        keyboard.append(control_row)
+        if selected:
+            keyboard.append([InlineKeyboardButton(
+                f"➡️ Next ({n} selected)", callback_data="qzsmch_next")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode")])
+        return text, keyboard
+    
+    def build_subjmulti_subfolder_menu(self, subjects, folders, selected):
+        """NEW: (text, keyboard) for picking MULTIPLE sub-folders at once, across all of the
+        already-selected subjects × chapters (sub-folder names are a UNION across those)."""
+        subfolder_names = self.get_union_subfolders(subjects, folders)
+        subj_label = ", ".join(subjects) if len(subjects) <= 3 else f"{len(subjects)} subjects selected"
+        folder_label = ", ".join(folders) if len(folders) <= 3 else f"{len(folders)} chapters selected"
+        n = len(selected)
+        text = (f"☑️ Select Multiple Sub-folders\n\n📚 Subjects: {subj_label}\n📁 Chapters: {folder_label}\n\n"
+                f"Tap sub-folders to select/unselect them.\n"
+                f"Leave none selected to include ALL questions (with & without sub-folders).\n\n"
+                f"✅ Selected: {n}")
+        keyboard = []
+        for name in subfolder_names:
+            checkbox = "☑️" if name in selected else "⬜"
+            token = self.register_name_token(name)
+            cnt = self.mongo.count_documents('quizzes', {
+                'subject': {'$in': list(subjects)}, 'folder': {'$in': list(folders)},
+                'subfolder': name, 'is_active': True})
+            keyboard.append([InlineKeyboardButton(
+                f"{checkbox} {name} ({cnt})", callback_data=f"qzsmsf_tgl_{token}")])
+        control_row = [
+            InlineKeyboardButton("✅ Select All", callback_data="qzsmsf_all"),
+            InlineKeyboardButton("◻️ Clear All", callback_data="qzsmsf_clr")
+        ]
+        keyboard.append(control_row)
+        start_label = f"▶️ Start Quiz ({n} selected)" if n else "▶️ Start Quiz (All)"
+        keyboard.append([InlineKeyboardButton(start_label, callback_data="qzsmsf_start")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsmch_show")])
+        return text, keyboard
+    
+    def build_subjmulti_full_count_menu(self, subjects, folders, subfolders, ctx_token, back_callback):
+        """NEW: (text, keyboard) asking how many questions, for a full
+        subjects × chapters × sub-folders selection."""
+        query = {'subject': {'$in': list(subjects)}, 'is_active': True}
+        if folders:
+            query['folder'] = {'$in': list(folders)}
+        if subfolders:
+            query['subfolder'] = {'$in': list(subfolders)}
+        total = self.mongo.count_documents('quizzes', query)
+        subj_label = ", ".join(subjects) if len(subjects) <= 3 else f"{len(subjects)} subjects selected"
+        folder_label = ", ".join(folders) if folders and len(folders) <= 3 else (
+            f"{len(folders)} chapters selected" if folders else "All")
+        text = (f"❓ How many questions do you want?\n\n"
+                f"📚 Subjects: {subj_label}\n📁 Chapters: {folder_label}\n")
+        if subfolders:
+            sf_label = ", ".join(subfolders) if len(subfolders) <= 3 else f"{len(subfolders)} sub-folders selected"
+            text += f"📂 Sub-folders: {sf_label}\n"
+        text += f"📝 Available: {total} question(s)\n\nChoose an option below (or send a custom number):"
+        keyboard = []
+        row = []
+        for preset in (10, 20, 50, 100):
+            if preset < total:
+                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzsmf_cnt_{ctx_token}_{preset}"))
+                if len(row) == 3:
+                    keyboard.append(row)
+                    row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzsmf_cnt_{ctx_token}_{total}")])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzsmf_cntcustom_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=back_callback)])
+        return text, keyboard
+    
+    def build_subjmulti_full_timer_menu(self, ctx_token, count):
+        """NEW: (text, keyboard) asking for the per-question time limit, for a full
+        subjects × chapters × sub-folders quiz."""
+        text = (f"⏱ Set a Timer\n\n"
+                f"📝 Questions selected: {count}\n\n"
+                f"Choose how much time you get per question:")
+        keyboard = []
+        row = []
+        for secs, label in ((10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (45, "45 sec"), (60, "1 min")):
+            row.append(InlineKeyboardButton(label, callback_data=f"qzsmf_tmr_{ctx_token}_{count}_{secs}"))
+            if len(row) == 3:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzsmf_tmrcustom_{ctx_token}_{count}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzsmf_backcnt_{ctx_token}")])
         return text, keyboard
     
     def build_subjmulti_count_menu(self, subjects, ctx_token):
@@ -1690,6 +1862,49 @@ class QuizBot:
             context.user_data['await'] = None
             await self.launch_quiz_session_subjmulti(context, update.effective_chat.id, subjects, count, secs)
         
+        # NEW: custom question count for the FULL multi-subject × chapter × sub-folder selection
+        elif state == 'quiz_subjmulti_full_custom_count':
+            token = context.user_data.get('quiz_subjmulti_full_ctx_token')
+            combo = self.resolve_subjmulti_full_ctx(token) if token else None
+            if not combo:
+                context.user_data['await'] = None
+                await update.message.reply_text("⚠️ Session expired. Please use /quiz to start again.")
+                return
+            subjects, folders, subfolders = combo
+            query_filter = {'subject': {'$in': list(subjects)}, 'is_active': True}
+            if folders:
+                query_filter['folder'] = {'$in': list(folders)}
+            if subfolders:
+                query_filter['subfolder'] = {'$in': list(subfolders)}
+            total = self.mongo.count_documents('quizzes', query_filter)
+            if not text.isdigit() or int(text) <= 0:
+                await update.message.reply_text(f"❌ Please send a valid positive number (1-{total}).")
+                return
+            count = min(int(text), total)
+            context.user_data['await'] = None
+            out_text, keyboard = self.build_subjmulti_full_timer_menu(token, count)
+            await update.message.reply_text(out_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        # NEW: custom timer for the FULL multi-subject × chapter × sub-folder selection
+        elif state == 'quiz_subjmulti_full_custom_timer':
+            token = context.user_data.get('quiz_subjmulti_full_ctx_token')
+            count = context.user_data.get('quiz_subjmulti_full_setup_count')
+            combo = self.resolve_subjmulti_full_ctx(token) if token else None
+            if not combo or count is None:
+                context.user_data['await'] = None
+                await update.message.reply_text("⚠️ Session expired. Please use /quiz to start again.")
+                return
+            if not text.isdigit() or not (5 <= int(text) <= 600):
+                await update.message.reply_text("❌ Please send a valid number of seconds (5-600).")
+                return
+            secs = int(text)
+            context.user_data['await'] = None
+            subjects, folders, subfolders = combo
+            await self.launch_quiz_session_subjmulti(
+                context, update.effective_chat.id, list(subjects), count, secs,
+                folders=list(folders) if folders else None,
+                subfolders=list(subfolders) if subfolders else None)
+        
         else:
             context.user_data['await'] = None
     
@@ -1758,10 +1973,11 @@ class QuizBot:
             await context.bot.send_message(chat_id, intro)
         await self.send_session_question(context, chat_id)
     
-    async def launch_quiz_session_subjmulti(self, context: ContextTypes.DEFAULT_TYPE, chat_id, subjects, count, secs, edit_query=None):
+    async def launch_quiz_session_subjmulti(self, context: ContextTypes.DEFAULT_TYPE, chat_id, subjects, count, secs, edit_query=None, folders=None, subfolders=None):
         """NEW: Same as launch_quiz_session, but for a MULTI-SUBJECT selection
-        (pools every chapter/folder under each chosen subject)."""
-        session = self.start_quiz_session_subjmulti(context, subjects, count, secs)
+        (pools every chapter/folder under each chosen subject).
+        folders/subfolders OPTIONALLY narrow it further (also multi-select)."""
+        session = self.start_quiz_session_subjmulti(context, subjects, count, secs, folders=folders, subfolders=subfolders)
         label = ", ".join(subjects) if len(subjects) <= 3 else f"{len(subjects)} subjects selected"
         if not session:
             text = (f"😔 No quiz questions here yet. Please check back later!\n\n"
@@ -1775,10 +1991,18 @@ class QuizBot:
                 await context.bot.send_message(chat_id, text, reply_markup=keyboard)
             return
         
+        extra_lines = ""
+        if folders:
+            folder_label = ", ".join(folders) if len(folders) <= 3 else f"{len(folders)} chapters selected"
+            extra_lines += f"📁 Chapters: {folder_label}\n"
+        if subfolders:
+            sf_label = ", ".join(subfolders) if len(subfolders) <= 3 else f"{len(subfolders)} sub-folders selected"
+            extra_lines += f"📂 Sub-folders: {sf_label}\n"
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
         intro = (
             f"▶️ Starting Quiz!\n\n"
             f"📚 Subjects: {label}\n"
+            f"{extra_lines}"
             f"📝 {session['total_questions']} question(s) • ⏱ {timer_label} per question • Random order\n\n"
             f"Answer each poll — the next question comes automatically!\n"
             f"Send /stop anytime to end the quiz and see your score.\n\n"
@@ -1839,6 +2063,14 @@ class QuizBot:
             subjects = session.get('subjects') or []
             subj_label = ", ".join(subjects) if len(subjects) <= 3 else f"{len(subjects)} subjects selected"
             header_lines = f"📚 Subjects: {subj_label}\n"
+            folders = session.get('folders') or []
+            if folders:
+                folder_label = ", ".join(folders) if len(folders) <= 3 else f"{len(folders)} chapters selected"
+                header_lines += f"📁 Chapters: {folder_label}\n"
+            subfolders = session.get('subfolders') or []
+            if subfolders:
+                sf_label = ", ".join(subfolders) if len(subfolders) <= 3 else f"{len(subfolders)} sub-folders selected"
+                header_lines += f"📂 Sub-folders: {sf_label}\n"
         elif session.get('is_multi'):
             folders = session.get('folders') or []
             folder_label = ", ".join(folders) if len(folders) <= 3 else f"{len(folders)} chapters selected"
@@ -1910,7 +2142,8 @@ class QuizBot:
                 context, query.message.chat_id,
                 session['subjects'],
                 session.get('total_questions'), session.get('timer_seconds', 0),
-                edit_query=query)
+                edit_query=query,
+                folders=session.get('folders'), subfolders=session.get('subfolders'))
         elif is_multi:
             await self.launch_quiz_session_multi(
                 context, query.message.chat_id,
@@ -1942,7 +2175,8 @@ class QuizBot:
         base_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
         if session.get('is_subj_multi'):
             subject_disp = f"{len(session.get('subjects') or [])} subjects"
-            folder_disp = "Multiple"
+            folders = session.get('folders') or []
+            folder_disp = f"{len(folders)} chapters" if folders else "Multiple"
         elif session.get('is_multi'):
             subject_disp = session.get('subject')
             folder_disp = f"{len(session.get('folders') or [])} chapters"
@@ -4570,6 +4804,7 @@ class QuizBot:
             text, keyboard = self.build_user_subject_multi_menu(set())
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         elif data == "qzsm_start":
+            # NEW: "Next" — instead of starting immediately, move on to multi-chapter selection
             selected = context.user_data.get('quiz_multi_subjects_selected', set())
             if not selected:
                 text, keyboard = self.build_user_subject_multi_menu(selected)
@@ -4578,9 +4813,193 @@ class QuizBot:
                     reply_markup=InlineKeyboardMarkup(keyboard))
             else:
                 subjects = sorted(selected)
-                ctx_token = self.register_subj_multi_ctx(subjects)
-                text, keyboard = self.build_subjmulti_count_menu(subjects, ctx_token)
+                context.user_data['quiz_subjmulti_subjects'] = subjects
+                context.user_data['quiz_subjmulti_chapters_selected'] = set()
+                text, keyboard = self.build_subjmulti_chapter_menu(subjects, set())
                 await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        # ==========================================================
+        # NEW: Multi-SUBJECT → Multi-CHAPTER (step 2 of the combined flow)
+        # ==========================================================
+        elif data.startswith("qzsmch_tgl_"):
+            token = data[len("qzsmch_tgl_"):]
+            name = self.resolve_name_token(token)
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            if not name or not subjects:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                selected = context.user_data.setdefault('quiz_subjmulti_chapters_selected', set())
+                if name in selected:
+                    selected.discard(name)
+                else:
+                    selected.add(name)
+                text, keyboard = self.build_subjmulti_chapter_menu(subjects, selected)
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmch_all":
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            folders = self.get_union_folders(subjects)
+            context.user_data['quiz_subjmulti_chapters_selected'] = set(folders.keys())
+            text, keyboard = self.build_subjmulti_chapter_menu(subjects, context.user_data['quiz_subjmulti_chapters_selected'])
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmch_clr":
+            context.user_data['quiz_subjmulti_chapters_selected'] = set()
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            text, keyboard = self.build_subjmulti_chapter_menu(subjects, set())
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmch_show":
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            selected = context.user_data.get('quiz_subjmulti_chapters_selected', set())
+            text, keyboard = self.build_subjmulti_chapter_menu(subjects, selected)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmch_next":
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            selected = context.user_data.get('quiz_subjmulti_chapters_selected', set())
+            if not subjects:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            elif not selected:
+                text, keyboard = self.build_subjmulti_chapter_menu(subjects, selected)
+                await query.edit_message_text(
+                    "⚠️ Please select at least one chapter first.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                folders = sorted(selected)
+                subfolder_options = self.get_union_subfolders(subjects, folders)
+                if subfolder_options:
+                    context.user_data['quiz_subjmulti_had_subfolders'] = True
+                    context.user_data['quiz_subjmulti_subfolders_selected'] = set()
+                    text, keyboard = self.build_subjmulti_subfolder_menu(subjects, folders, set())
+                else:
+                    context.user_data['quiz_subjmulti_had_subfolders'] = False
+                    ctx_token = self.register_subjmulti_full_ctx(subjects, folders, None)
+                    text, keyboard = self.build_subjmulti_full_count_menu(subjects, folders, None, ctx_token, "qzsmch_show")
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        # ==========================================================
+        # NEW: Multi-SUBJECT → Multi-CHAPTER → Multi-SUB-FOLDER (step 3 of the combined flow)
+        # ==========================================================
+        elif data.startswith("qzsmsf_tgl_"):
+            token = data[len("qzsmsf_tgl_"):]
+            name = self.resolve_name_token(token)
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            folders = sorted(context.user_data.get('quiz_subjmulti_chapters_selected', set()))
+            if not name or not subjects or not folders:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                selected = context.user_data.setdefault('quiz_subjmulti_subfolders_selected', set())
+                if name in selected:
+                    selected.discard(name)
+                else:
+                    selected.add(name)
+                text, keyboard = self.build_subjmulti_subfolder_menu(subjects, folders, selected)
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmsf_all":
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            folders = sorted(context.user_data.get('quiz_subjmulti_chapters_selected', set()))
+            names = self.get_union_subfolders(subjects, folders)
+            context.user_data['quiz_subjmulti_subfolders_selected'] = set(names)
+            text, keyboard = self.build_subjmulti_subfolder_menu(subjects, folders, context.user_data['quiz_subjmulti_subfolders_selected'])
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmsf_clr":
+            context.user_data['quiz_subjmulti_subfolders_selected'] = set()
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            folders = sorted(context.user_data.get('quiz_subjmulti_chapters_selected', set()))
+            text, keyboard = self.build_subjmulti_subfolder_menu(subjects, folders, set())
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmsf_show":
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            folders = sorted(context.user_data.get('quiz_subjmulti_chapters_selected', set()))
+            selected = context.user_data.get('quiz_subjmulti_subfolders_selected', set())
+            text, keyboard = self.build_subjmulti_subfolder_menu(subjects, folders, selected)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data == "qzsmsf_start":
+            subjects = context.user_data.get('quiz_subjmulti_subjects') or []
+            folders = sorted(context.user_data.get('quiz_subjmulti_chapters_selected', set()))
+            subfolders = sorted(context.user_data.get('quiz_subjmulti_subfolders_selected', set()))
+            if not subjects or not folders:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                ctx_token = self.register_subjmulti_full_ctx(subjects, folders, subfolders or None)
+                text, keyboard = self.build_subjmulti_full_count_menu(subjects, folders, subfolders or None, ctx_token, "qzsmsf_show")
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        # ==========================================================
+        # NEW: Multi-SUBJECT → Multi-CHAPTER → Multi-SUB-FOLDER → count/timer/start (step 4)
+        # ==========================================================
+        elif data.startswith("qzsmf_backcnt_"):
+            token = data[len("qzsmf_backcnt_"):]
+            combo = self.resolve_subjmulti_full_ctx(token)
+            if not combo:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                subjects, folders, subfolders = combo
+                had_sf = context.user_data.get('quiz_subjmulti_had_subfolders', bool(subfolders))
+                back_cb = "qzsmsf_show" if had_sf else "qzsmch_show"
+                text, keyboard = self.build_subjmulti_full_count_menu(subjects, folders, subfolders, token, back_cb)
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzsmf_cntcustom_"):
+            token = data[len("qzsmf_cntcustom_"):]
+            combo = self.resolve_subjmulti_full_ctx(token)
+            if not combo:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                subjects, folders, subfolders = combo
+                query_filter = {'subject': {'$in': list(subjects)}, 'is_active': True}
+                if folders:
+                    query_filter['folder'] = {'$in': list(folders)}
+                if subfolders:
+                    query_filter['subfolder'] = {'$in': list(subfolders)}
+                total = self.mongo.count_documents('quizzes', query_filter)
+                context.user_data['await'] = 'quiz_subjmulti_full_custom_count'
+                context.user_data['quiz_subjmulti_full_ctx_token'] = token
+                await query.edit_message_text(f"✏️ Send the number of questions you want (1-{total}).")
+        elif data.startswith("qzsmf_cnt_"):
+            # format: qzsmf_cnt_<ctx_token>_<count>
+            body = data[len("qzsmf_cnt_"):]
+            ctx_token, _, count_str = body.rpartition('_')
+            count = int(count_str)
+            text, keyboard = self.build_subjmulti_full_timer_menu(ctx_token, count)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzsmf_tmrcustom_"):
+            # format: qzsmf_tmrcustom_<ctx_token>_<count>
+            body = data[len("qzsmf_tmrcustom_"):]
+            ctx_token, _, count_str = body.rpartition('_')
+            context.user_data['await'] = 'quiz_subjmulti_full_custom_timer'
+            context.user_data['quiz_subjmulti_full_ctx_token'] = ctx_token
+            context.user_data['quiz_subjmulti_full_setup_count'] = int(count_str)
+            await query.edit_message_text("✏️ Send the time limit per question, in seconds (5-600).")
+        elif data.startswith("qzsmf_tmr_"):
+            # format: qzsmf_tmr_<ctx_token>_<count>_<secs>
+            body = data[len("qzsmf_tmr_"):]
+            rest, _, secs_str = body.rpartition('_')
+            ctx_token, _, count_str = rest.rpartition('_')
+            combo = self.resolve_subjmulti_full_ctx(ctx_token)
+            if not combo:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                subjects, folders, subfolders = combo
+                await self.launch_quiz_session_subjmulti(
+                    context, query.message.chat_id, list(subjects),
+                    int(count_str), int(secs_str), edit_query=query,
+                    folders=list(folders) if folders else None,
+                    subfolders=list(subfolders) if subfolders else None)
         elif data.startswith("qzsc_backcnt_"):
             token = data[len("qzsc_backcnt_"):]
             subjects = self.resolve_subj_multi_ctx(token)
