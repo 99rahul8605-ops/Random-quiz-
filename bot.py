@@ -1703,7 +1703,12 @@ class QuizBot:
                     "❌ No subject selected. Start again from /start → 📝 Add Quiz.")
                 return
             context.user_data['add_state'] = {'subject': subject, 'folder': name, 'saved_count': 0}
-            await self.enter_adding_mode(update, context)
+            # FIX: show Step 3 (Sub-folder optional) instead of jumping straight
+            # into adding mode, so admin can pick/create a sub-folder or skip it.
+            text, keyboard = self.build_admin_subfolder_menu(subject, name)
+            await update.message.reply_text(
+                f"✅ New quiz folder created: {name}\n\n{text}",
+                reply_markup=InlineKeyboardMarkup(keyboard))
         
         elif state == 'new_subfolder':
             info = context.user_data.pop('new_subfolder_pair', {}) or {}
