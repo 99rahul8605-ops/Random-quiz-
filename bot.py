@@ -169,6 +169,8 @@ class QuizBot:
         self.pair_tokens = {}
         # NEW: token -> (subject, folder, subfolder) — subfolder='' means "no sub-folder / all"
         self.qz_ctx_tokens = {}
+        # NEW: token -> (subject, (folder1, folder2, ...)) for multi-chapter quiz selection
+        self.multi_ctx_tokens = {}
     
     # ==========================================================
     # NEW: HIERARCHICAL QUIZ HELPERS (Subject → Folder → Questions)
@@ -271,6 +273,18 @@ class QuizBot:
             print(f"⚠️ Quiz-context token map rebuild failed: {e}")
         return self.qz_ctx_tokens.get(token)
 
+    def register_multi_ctx(self, subject, folders):
+        """NEW: Register and return a short token for a (subject, [folders...]) multi-chapter selection."""
+        folders = tuple(sorted(folders))
+        token = self.make_token(f"multi::{subject}::{'|'.join(folders)}")
+        self.multi_ctx_tokens[token] = (subject, folders)
+        return token
+
+    def resolve_multi_ctx(self, token):
+        """NEW: Resolve a multi-ctx token back to (subject, folders tuple). Not DB-rebuildable
+        (arbitrary subset), so if the bot restarted mid-flow the user just needs to reselect."""
+        return self.multi_ctx_tokens.get(token)
+
     def get_subjects(self):
         """Get all distinct subject names (sorted)"""
         try:
@@ -372,6 +386,37 @@ class QuizBot:
         self.save_stats()
         return session
     
+    def start_quiz_session_multi(self, context, subject, folders, limit=None, timer_seconds=0):
+        """NEW: Like start_quiz_session, but pulls questions from MULTIPLE chapters/folders at once
+        (all sub-folders included). Returns the session dict, or None if nothing matches."""
+        query = {'subject': subject, 'folder': {'$in': list(folders)}, 'is_active': True}
+        quizzes = self.mongo.find('quizzes', query)
+        if not quizzes:
+            return None
+        ids = [str(q['_id']) for q in quizzes]
+        random.shuffle(ids)
+        if limit and limit > 0:
+            ids = ids[:limit]
+        session = {
+            'subject': subject,
+            'folder': None,
+            'folders': list(folders),   # NEW: multiple chapters
+            'is_multi': True,           # NEW: flag used by shared session code
+            'subfolder': '',
+            'remaining_quiz_ids': ids,
+            'total_questions': len(ids),
+            'current_question': 0,
+            'score': 0,
+            'answered': 0,
+            'last_poll_id': None,
+            'last_correct_option_id': None,
+            'timer_seconds': timer_seconds or 0,
+        }
+        context.user_data['quiz_session'] = session
+        self.stats['user_quiz_sessions'] = self.stats.get('user_quiz_sessions', 0) + 1
+        self.save_stats()
+        return session
+    
     def get_next_quiz_question(self, context):
         """Pop the next quiz for the active session.
         Returns (session, quiz) — quiz is None when the session is finished."""
@@ -418,7 +463,81 @@ class QuizBot:
         for name in sorted(folders.keys()):
             token = self.register_pair_token(subject, name)
             keyboard.append([InlineKeyboardButton(f"📁 {name} ({folders[name]})", callback_data=f"qz_fold_{token}")])
+        # NEW: let the user pick more than one chapter/folder at once
+        if len(folders) >= 2:
+            subject_token = self.register_subject_token(subject)
+            keyboard.append([InlineKeyboardButton(
+                "☑️ Select Multiple Chapters", callback_data=f"qzm_mode_{subject_token}")])
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qz_back_subjects")])
+        return text, keyboard
+    
+    def build_user_folder_multi_menu(self, subject, selected):
+        """NEW: (text, keyboard) for picking MULTIPLE chapters/folders at once.
+        Tapping a chapter toggles its checkbox; nothing else changes on screen."""
+        folders = self.get_structure()['folders'].get(subject, {})
+        subject_token = self.register_subject_token(subject)
+        n = len(selected)
+        text = (f"☑️ {subject} — Select Multiple Chapters\n\n"
+                f"Tap chapters to select/unselect them. You can pick as many as you like.\n\n"
+                f"✅ Selected: {n}")
+        keyboard = []
+        for name in sorted(folders.keys()):
+            checkbox = "☑️" if name in selected else "⬜"
+            token = self.register_pair_token(subject, name)
+            keyboard.append([InlineKeyboardButton(
+                f"{checkbox} {name} ({folders[name]})", callback_data=f"qzm_tgl_{token}")])
+        control_row = [
+            InlineKeyboardButton("✅ Select All", callback_data=f"qzm_all_{subject_token}"),
+            InlineKeyboardButton("◻️ Clear All", callback_data=f"qzm_clr_{subject_token}")
+        ]
+        keyboard.append(control_row)
+        if selected:
+            keyboard.append([InlineKeyboardButton(
+                f"▶️ Start Quiz ({n} selected)", callback_data=f"qzm_start_{subject_token}")])
+        keyboard.append([InlineKeyboardButton("🔙 Single-Select Mode", callback_data="qz_back_folders")])
+        keyboard.append([InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")])
+        return text, keyboard
+    
+    def build_multi_quiz_count_menu(self, subject, folders, ctx_token):
+        """NEW: (text, keyboard) asking how many questions, for a multi-chapter selection."""
+        query = {'subject': subject, 'folder': {'$in': list(folders)}, 'is_active': True}
+        total = self.mongo.count_documents('quizzes', query)
+        label = ", ".join(folders) if len(folders) <= 3 else f"{len(folders)} chapters selected"
+        text = (f"❓ How many questions do you want?\n\n"
+                f"📚 Subject: {subject}\n📁 Chapters: {label}\n📝 Available: {total} question(s)\n\n"
+                f"Choose an option below (or send a custom number):")
+        keyboard = []
+        row = []
+        for preset in (10, 20, 50, 100):
+            if preset < total:
+                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzm_cnt_{ctx_token}_{preset}"))
+                if len(row) == 3:
+                    keyboard.append(row)
+                    row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzm_cnt_{ctx_token}_{total}")])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzm_cntcustom_{ctx_token}")])
+        subject_token = self.register_subject_token(subject)
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzm_mode_{subject_token}")])
+        return text, keyboard
+    
+    def build_multi_quiz_timer_menu(self, ctx_token, count):
+        """NEW: (text, keyboard) asking for the per-question time limit, for a multi-chapter quiz."""
+        text = (f"⏱ Set a Timer\n\n"
+                f"📝 Questions selected: {count}\n\n"
+                f"Choose how much time you get per question:")
+        keyboard = []
+        row = []
+        for secs, label in ((10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (45, "45 sec"), (60, "1 min")):
+            row.append(InlineKeyboardButton(label, callback_data=f"qzm_tmr_{ctx_token}_{count}_{secs}"))
+            if len(row) == 3:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzm_tmrcustom_{ctx_token}_{count}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzm_backcnt_{ctx_token}")])
         return text, keyboard
     
     def build_user_subfolder_menu(self, subject, folder):
@@ -862,7 +981,9 @@ class QuizBot:
         
         # NEW: quiz custom-count / custom-timer text input is available to ANY user
         # (not just admin) since /quiz is open to everyone.
-        if context.user_data.get('await') in ('quiz_custom_count', 'quiz_custom_timer'):
+        if context.user_data.get('await') in (
+                'quiz_custom_count', 'quiz_custom_timer',
+                'quiz_multi_custom_count', 'quiz_multi_custom_timer'):
             await self.handle_quiz_custom_input(update, context)
             return
         
@@ -1381,6 +1502,42 @@ class QuizBot:
             subject, folder, subfolder = triple
             await self.launch_quiz_session(context, update.effective_chat.id, subject, folder, subfolder, count, secs)
         
+        # NEW: custom question count for a MULTI-CHAPTER selection
+        elif state == 'quiz_multi_custom_count':
+            token = context.user_data.get('quiz_multi_ctx_token')
+            pair = self.resolve_multi_ctx(token) if token else None
+            if not pair:
+                context.user_data['await'] = None
+                await update.message.reply_text("⚠️ Session expired. Please use /quiz to start again.")
+                return
+            subject, folders = pair
+            query_filter = {'subject': subject, 'folder': {'$in': list(folders)}, 'is_active': True}
+            total = self.mongo.count_documents('quizzes', query_filter)
+            if not text.isdigit() or int(text) <= 0:
+                await update.message.reply_text(f"❌ Please send a valid positive number (1-{total}).")
+                return
+            count = min(int(text), total)
+            context.user_data['await'] = None
+            out_text, keyboard = self.build_multi_quiz_timer_menu(token, count)
+            await update.message.reply_text(out_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        # NEW: custom timer for a MULTI-CHAPTER selection
+        elif state == 'quiz_multi_custom_timer':
+            token = context.user_data.get('quiz_multi_ctx_token')
+            count = context.user_data.get('quiz_multi_setup_count')
+            pair = self.resolve_multi_ctx(token) if token else None
+            if not pair or count is None:
+                context.user_data['await'] = None
+                await update.message.reply_text("⚠️ Session expired. Please use /quiz to start again.")
+                return
+            if not text.isdigit() or not (5 <= int(text) <= 600):
+                await update.message.reply_text("❌ Please send a valid number of seconds (5-600).")
+                return
+            secs = int(text)
+            context.user_data['await'] = None
+            subject, folders = pair
+            await self.launch_quiz_session_multi(context, update.effective_chat.id, subject, folders, count, secs)
+        
         else:
             context.user_data['await'] = None
     
@@ -1402,6 +1559,38 @@ class QuizBot:
             return
         
         label = f"{folder} → 📂 {subfolder}" if subfolder else folder
+        timer_label = "1 min" if secs == 60 else f"{secs} sec"
+        intro = (
+            f"▶️ Starting Quiz!\n\n"
+            f"📚 {subject}\n📁 {label}\n"
+            f"📝 {session['total_questions']} question(s) • ⏱ {timer_label} per question • Random order\n\n"
+            f"Answer each poll — the next question comes automatically!\n"
+            f"Send /stop anytime to end the quiz and see your score.\n\n"
+            f"Good luck! 🍀"
+        )
+        if edit_query:
+            await edit_query.edit_message_text(intro)
+        else:
+            await context.bot.send_message(chat_id, intro)
+        await self.send_session_question(context, chat_id)
+    
+    async def launch_quiz_session_multi(self, context: ContextTypes.DEFAULT_TYPE, chat_id, subject, folders, count, secs, edit_query=None):
+        """NEW: Same as launch_quiz_session, but for a MULTI-CHAPTER selection."""
+        session = self.start_quiz_session_multi(context, subject, folders, count, secs)
+        label = ", ".join(folders) if len(folders) <= 3 else f"{len(folders)} chapters selected"
+        if not session:
+            text = (f"😔 No quiz questions here yet. Please check back later!\n\n"
+                    f"📚 Subject: {subject}\n📁 Chapters: {label}")
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders")],
+                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+            ])
+            if edit_query:
+                await edit_query.edit_message_text(text, reply_markup=keyboard)
+            else:
+                await context.bot.send_message(chat_id, text, reply_markup=keyboard)
+            return
+        
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
         intro = (
             f"▶️ Starting Quiz!\n\n"
@@ -1462,8 +1651,12 @@ class QuizBot:
         answered = session.get('answered', 0)
         score = session.get('score', 0)
         title = "🛑 Quiz Stopped!" if stopped else "🎉 Quiz Completed!"
-        subfolder = session.get('subfolder')
-        folder_label = f"{session.get('folder')} → 📂 {subfolder}" if subfolder else session.get('folder')
+        if session.get('is_multi'):
+            folders = session.get('folders') or []
+            folder_label = ", ".join(folders) if len(folders) <= 3 else f"{len(folders)} chapters selected"
+        else:
+            subfolder = session.get('subfolder')
+            folder_label = f"{session.get('folder')} → 📂 {subfolder}" if subfolder else session.get('folder')
         timer = session.get('timer_seconds', 0)
         timer_label = ("1 min" if timer == 60 else f"{timer} sec") if timer else "No limit"
         text = (
@@ -1509,17 +1702,26 @@ class QuizBot:
         """User tapped 'Restart This Quiz' on the completion screen"""
         query = update.callback_query
         session = context.user_data.get('quiz_session')
-        if not session or not session.get('subject') or not session.get('folder'):
+        is_multi = bool(session and session.get('is_multi'))
+        valid = session and session.get('subject') and (session.get('folders') if is_multi else session.get('folder'))
+        if not valid:
             text, keyboard = self.build_user_subject_menu()
             await query.edit_message_text(
                 "⚠️ No quiz session found — browse again below.\n\n" + text,
                 reply_markup=InlineKeyboardMarkup(keyboard))
             return
-        await self.launch_quiz_session(
-            context, query.message.chat_id,
-            session['subject'], session['folder'], session.get('subfolder', ''),
-            session.get('total_questions'), session.get('timer_seconds', 0),
-            edit_query=query)
+        if is_multi:
+            await self.launch_quiz_session_multi(
+                context, query.message.chat_id,
+                session['subject'], session['folders'],
+                session.get('total_questions'), session.get('timer_seconds', 0),
+                edit_query=query)
+        else:
+            await self.launch_quiz_session(
+                context, query.message.chat_id,
+                session['subject'], session['folder'], session.get('subfolder', ''),
+                session.get('total_questions'), session.get('timer_seconds', 0),
+                edit_query=query)
     
     async def send_session_question(self, context: ContextTypes.DEFAULT_TYPE, chat_id):
         """Send the next question of the active user quiz session (or completion)"""
@@ -1537,7 +1739,11 @@ class QuizBot:
         self.stats['user_quizzes_sent'] = self.stats.get('user_quizzes_sent', 0) + 1
         progress = f"Question {session.get('current_question', 0)}/{session.get('total_questions', 0)}"
         base_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
-        explanation = f"📊 {progress} • 📚 {session['subject']} • 📁 {session['folder']}\n\n{base_explanation}"[:200]
+        if session.get('is_multi'):
+            folder_disp = f"{len(session.get('folders') or [])} chapters"
+        else:
+            folder_disp = session['folder']
+        explanation = f"📊 {progress} • 📚 {session['subject']} • 📁 {folder_disp}\n\n{base_explanation}"[:200]
         
         # NEW: use the per-question timer chosen at quiz setup (0 = no limit)
         timer_seconds = session.get('timer_seconds', 0) or 0
@@ -3991,6 +4197,139 @@ class QuizBot:
             else:
                 text, keyboard = self.build_user_folder_menu(subject)
                 await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        # ==========================================================
+        # NEW: Multi-chapter quiz selection (pick several folders at once)
+        # ==========================================================
+        elif data.startswith("qzm_mode_"):
+            token = data[len("qzm_mode_"):]
+            subject = self.resolve_subject_token(token)
+            if not subject:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                # Keep existing selection only if the user is still on the same subject
+                if context.user_data.get('quiz_multi_subject') != subject:
+                    context.user_data['quiz_multi_selected'] = set()
+                    context.user_data['quiz_multi_subject'] = subject
+                context.user_data['quiz_browse_subject'] = subject
+                selected = context.user_data.get('quiz_multi_selected', set())
+                text, keyboard = self.build_user_folder_multi_menu(subject, selected)
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzm_tgl_"):
+            token = data[len("qzm_tgl_"):]
+            pair = self.resolve_pair_token(token)
+            if not pair:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                subject, folder = pair
+                selected = context.user_data.setdefault('quiz_multi_selected', set())
+                if folder in selected:
+                    selected.discard(folder)
+                else:
+                    selected.add(folder)
+                context.user_data['quiz_multi_subject'] = subject
+                context.user_data['quiz_browse_subject'] = subject
+                text, keyboard = self.build_user_folder_multi_menu(subject, selected)
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzm_all_"):
+            token = data[len("qzm_all_"):]
+            subject = self.resolve_subject_token(token)
+            if subject:
+                folders = self.get_structure()['folders'].get(subject, {})
+                context.user_data['quiz_multi_selected'] = set(folders.keys())
+                context.user_data['quiz_multi_subject'] = subject
+                text, keyboard = self.build_user_folder_multi_menu(subject, context.user_data['quiz_multi_selected'])
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzm_clr_"):
+            token = data[len("qzm_clr_"):]
+            subject = self.resolve_subject_token(token)
+            if subject:
+                context.user_data['quiz_multi_selected'] = set()
+                context.user_data['quiz_multi_subject'] = subject
+                text, keyboard = self.build_user_folder_multi_menu(subject, set())
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzm_start_"):
+            token = data[len("qzm_start_"):]
+            subject = self.resolve_subject_token(token)
+            selected = context.user_data.get('quiz_multi_selected', set())
+            if not subject:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ This button is no longer valid (data may have changed).\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            elif not selected:
+                text, keyboard = self.build_user_folder_multi_menu(subject, selected)
+                await query.edit_message_text(
+                    "⚠️ Please select at least one chapter first.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                folders = sorted(selected)
+                ctx_token = self.register_multi_ctx(subject, folders)
+                text, keyboard = self.build_multi_quiz_count_menu(subject, folders, ctx_token)
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzm_backcnt_"):
+            token = data[len("qzm_backcnt_"):]
+            pair = self.resolve_multi_ctx(token)
+            if not pair:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                subject, folders = pair
+                text, keyboard = self.build_multi_quiz_count_menu(subject, list(folders), token)
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzm_cntcustom_"):
+            token = data[len("qzm_cntcustom_"):]
+            pair = self.resolve_multi_ctx(token)
+            if not pair:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                subject, folders = pair
+                query_filter = {'subject': subject, 'folder': {'$in': list(folders)}, 'is_active': True}
+                total = self.mongo.count_documents('quizzes', query_filter)
+                context.user_data['await'] = 'quiz_multi_custom_count'
+                context.user_data['quiz_multi_ctx_token'] = token
+                await query.edit_message_text(f"✏️ Send the number of questions you want (1-{total}).")
+        elif data.startswith("qzm_cnt_"):
+            # format: qzm_cnt_<ctx_token>_<count>
+            body = data[len("qzm_cnt_"):]
+            ctx_token, _, count_str = body.rpartition('_')
+            count = int(count_str)
+            text, keyboard = self.build_multi_quiz_timer_menu(ctx_token, count)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif data.startswith("qzm_tmrcustom_"):
+            # format: qzm_tmrcustom_<ctx_token>_<count>
+            body = data[len("qzm_tmrcustom_"):]
+            ctx_token, _, count_str = body.rpartition('_')
+            context.user_data['await'] = 'quiz_multi_custom_timer'
+            context.user_data['quiz_multi_ctx_token'] = ctx_token
+            context.user_data['quiz_multi_setup_count'] = int(count_str)
+            await query.edit_message_text("✏️ Send the time limit per question, in seconds (5-600).")
+        elif data.startswith("qzm_tmr_"):
+            # format: qzm_tmr_<ctx_token>_<count>_<secs>
+            body = data[len("qzm_tmr_"):]
+            rest, _, secs_str = body.rpartition('_')
+            ctx_token, _, count_str = rest.rpartition('_')
+            pair = self.resolve_multi_ctx(ctx_token)
+            if not pair:
+                text, keyboard = self.build_user_subject_menu()
+                await query.edit_message_text(
+                    "⚠️ Session expired — browse again below.\n\n" + text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                subject, folders = pair
+                await self.launch_quiz_session_multi(
+                    context, query.message.chat_id, subject, list(folders),
+                    int(count_str), int(secs_str), edit_query=query)
     
     async def remove_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         """Remove a group from the list"""
