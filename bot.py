@@ -23,6 +23,8 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID'))
 PORT = int(os.getenv('PORT', 10000))
 MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/quizbot')
+# NEW: shown as the "🆘 Support" button on /start — set this to your support @username (no @) or a t.me link
+SUPPORT_USERNAME = os.getenv('SUPPORT_USERNAME', '').lstrip('@').strip()
 
 # Global bot instance
 bot_instance = None
@@ -1200,15 +1202,27 @@ class QuizBot:
                     reply_markup=reply_markup
                 )
             else:
+                bot_username = context.bot.username
+                keyboard = [
+                    [InlineKeyboardButton("➕ Add me to your Group", url=f"https://t.me/{bot_username}?startgroup=true")],
+                    [InlineKeyboardButton("🎮 Play Quiz", callback_data="qz_back_subjects")]
+                ]
+                if SUPPORT_USERNAME:
+                    support_url = SUPPORT_USERNAME if SUPPORT_USERNAME.startswith('http') else f"https://t.me/{SUPPORT_USERNAME}"
+                    keyboard.append([InlineKeyboardButton("🆘 Support", url=support_url)])
                 await update.message.reply_text(
-                    "👋 Hello! I'm a quiz bot that sends random quiz polls regularly.\n\n"
-                    "Add me to your group and make me an admin to start receiving fun quiz polls!\n\n"
+                    "👋 **Welcome!**\n\n"
+                    "I'm a Quiz Bot — I send fun quiz polls in groups and let you play quizzes right here in DM!\n\n"
+                    "➕ **Add me to your group** and make me an admin to start receiving quiz polls automatically.\n\n"
                     "⚡ **Group Commands:**\n"
-                    "• /rquiz - Send immediate random quiz (Group admins only)\n"
-                    "• /qreport - Report a quiz for review (Reply to a quiz with this command)\n\n"
-                    "🎮 **Play Quizzes Here:**\n"
-                    "• /quiz - Browse subjects and quiz folders, then play them here in private chat!\n"
-                    "• /stop - End your running quiz and see your score (questions come automatically after each answer!)"
+                    "• /quiz - Browse and start a quiz (group admins)\n"
+                    "• /rquiz - Send an immediate random quiz (group admins)\n"
+                    "• /qreport - Report a quiz for review (reply to a quiz with this command)\n\n"
+                    "🎮 **Play Quizzes:**\n"
+                    "• /quiz - Browse subjects and quiz folders, then play right here in private chat!\n"
+                    "• /stop - End your running quiz and see your score (next question comes automatically after each answer!)\n\n"
+                    "Need help? Tap 🆘 Support below.",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
         else:
             # Bot added to a group - only for groups and supergroups
@@ -1611,11 +1625,27 @@ class QuizBot:
     # ==========================================================
     
     async def quiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /quiz — browse subjects/folders and play quizzes (private chat, any user)"""
-        if update.effective_chat.type != 'private':
+        """Handle /quiz — browse subjects/folders and play quizzes.
+        Works in private chat (any user) AND in groups (group admins / bot admin only)."""
+        chat_type = update.effective_chat.type
+        
+        if chat_type in ['group', 'supergroup']:
+            user_id = update.effective_user.id
+            chat_id = update.effective_chat.id
+            is_admin = self.is_admin(user_id)
+            if not is_admin:
+                try:
+                    chat_member = await context.bot.get_chat_member(chat_id, user_id)
+                    if chat_member.status in ['administrator', 'creator']:
+                        is_admin = True
+                except Exception as e:
+                    print(f"Error checking admin status: {e}")
+            if not is_admin:
+                await update.message.reply_text("❌ Only group admins can use /quiz here!")
+                return
+        elif chat_type != 'private':
             await update.message.reply_text(
-                "❌ /quiz works only in the bot's private chat!\n"
-                "Send me a private message and use /quiz there. 🎮"
+                "❌ /quiz works only in the bot's private chat or in a group (admins only)!"
             )
             return
         
