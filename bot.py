@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PollAnswerHandler
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from bson.objectid import ObjectId
@@ -310,6 +310,10 @@ class QuizBot:
             'remaining_quiz_ids': ids,
             'total_questions': len(ids),
             'current_question': 0,
+            'score': 0,          # NEW: correct answers in this session
+            'answered': 0,       # NEW: questions the user has answered
+            'last_poll_id': None,       # NEW: poll id of the question on screen
+            'last_correct_option_id': None,  # NEW: to grade the answer
         }
         context.user_data['quiz_session'] = session
         self.stats['user_quiz_sessions'] = self.stats.get('user_quiz_sessions', 0) + 1
@@ -660,7 +664,8 @@ class QuizBot:
                     "• /rquiz - Send immediate random quiz (Group admins only)\n"
                     "• /qreport - Report a quiz for review (Reply to a quiz with this command)\n\n"
                     "🎮 **Play Quizzes Here:**\n"
-                    "• /quiz - Browse subjects and quiz folders, then play them here in private chat!"
+                    "• /quiz - Browse subjects and quiz folders, then play them here in private chat!\n"
+                    "• /stop - End your running quiz and see your score (questions come automatically after each answer!)"
                 )
         else:
             # Bot added to a group - only for groups and supergroups
@@ -1118,20 +1123,90 @@ class QuizBot:
             f"▶️ Starting: {folder}\n"
             f"📚 {subject}\n"
             f"📝 {session['total_questions']} questions • Random order\n\n"
+            f"Answer each poll — the next question comes automatically!\n"
+            f"Send /stop anytime to end the quiz and see your score.\n\n"
             f"Good luck! 🍀")
         await self.send_session_question(context, query.message.chat_id)
     
-    async def handle_qz_next(self, update: Update, context: ContextTypes.DEFAULT_TYPE, index_str):
-        """User tapped 'Next Question' — index guards against double-clicks on old buttons"""
+    async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """NEW: Grade the user's answer, then AUTOMATICALLY send the next question.
+        Fires when the user votes in a non-anonymous quiz poll."""
+        pa = update.poll_answer
         session = context.user_data.get('quiz_session')
         if not session or session.get('completed'):
-            return  # already acknowledged by the top-level query.answer()
-        try:
-            if int(index_str) != session.get('current_question', 0):
-                return  # stale button from an earlier question
-        except ValueError:
             return
-        await self.send_session_question(context, update.callback_query.message.chat_id)
+        # Only react to the question currently on the user's screen
+        if session.get('last_poll_id') != pa.poll_id:
+            return
+        
+        session['answered'] = session.get('answered', 0) + 1
+        chosen = pa.option_ids[0] if pa.option_ids else None
+        correct_id = session.get('last_correct_option_id')
+        is_correct = chosen is not None and chosen == correct_id
+        if is_correct:
+            session['score'] = session.get('score', 0) + 1
+            self.stats['user_quiz_correct'] = self.stats.get('user_quiz_correct', 0) + 1
+        self.save_stats()
+        
+        chat_id = pa.user.id
+        
+        # Quick feedback, then the next question follows automatically
+        if is_correct:
+            feedback = "✅ Correct! 🎉\n\n➡️ Next question..."
+        else:
+            options = session.get('last_options') or []
+            correct_text = options[correct_id] if correct_id is not None and correct_id < len(options) else "?"
+            feedback = f"❌ Wrong!\n✅ Correct answer: {correct_text}\n\n➡️ Next question..."
+        try:
+            await context.bot.send_message(chat_id, feedback)
+        except Exception as e:
+            print(f"⚠️ Could not send quiz feedback: {e}")
+        
+        await self.send_session_question(context, chat_id)
+    
+    def build_session_result(self, session, stopped=False):
+        """NEW: Result text with score for a finished/stopped session"""
+        total = session.get('total_questions', 0)
+        answered = session.get('answered', 0)
+        score = session.get('score', 0)
+        title = "🛑 Quiz Stopped!" if stopped else "🎉 Quiz Completed!"
+        text = (
+            f"{title}\n\n"
+            f"📚 Subject: {session.get('subject')}\n"
+            f"📁 Quiz Folder: {session.get('folder')}\n\n"
+            f"🏆 Your Score: {score}/{answered}\n"
+            f"📝 Questions: {answered}/{total} attempted\n"
+        )
+        if answered:
+            text += f"🎯 Accuracy: {score / answered * 100:.0f}%\n"
+        text += "\nGreat job! 🎓" if not stopped else "Come back anytime! 💪"
+        return text
+    
+    async def stop_quiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """NEW: Handle /stop — end the running quiz session and show the result"""
+        if update.effective_chat.type != 'private':
+            await update.message.reply_text(
+                "❌ /stop works only in the bot's private chat!\n"
+                "Open my DM and send /stop there to end your quiz.")
+            return
+        
+        session = context.user_data.get('quiz_session')
+        if not session or session.get('completed'):
+            await update.message.reply_text(
+                "ℹ️ You have no quiz running.\n"
+                "Use /quiz to start a new quiz! 🎮")
+            return
+        
+        session['completed'] = True
+        self.save_stats()  # persist score counters
+        
+        text = self.build_session_result(session, stopped=True)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart")],
+            [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders")],
+            [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+        ])
+        await update.message.reply_text(text, reply_markup=keyboard)
     
     async def handle_qz_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """User tapped 'Restart This Quiz' on the completion screen"""
@@ -1178,12 +1253,7 @@ class QuizBot:
         base_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
         explanation = f"📊 {progress} • 📚 {session['subject']} • 📁 {session['folder']}\n\n{base_explanation}"[:200]
         
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("➡️ Next Question",
-                                 callback_data=f"qz_next_{session.get('current_question', 0)}")
-        ]])
-        
-        await context.bot.send_poll(
+        message = await context.bot.send_poll(
             chat_id=chat_id,
             question=f"❓ {quiz['question']}",
             options=quiz['options'],
@@ -1193,26 +1263,26 @@ class QuizBot:
             correct_option_id=quiz['correct_option_id'],
             explanation=explanation,
             open_period=0,
-            protect_content=False,
-            reply_markup=keyboard
+            protect_content=False
         )
+        
+        # NEW: remember this poll so the answer handler can grade it and
+        # automatically send the next question when the user votes
+        session['last_poll_id'] = message.poll.id
+        session['last_correct_option_id'] = quiz['correct_option_id']
+        session['last_options'] = quiz['options']
     
     async def send_session_complete(self, context: ContextTypes.DEFAULT_TYPE, chat_id, session):
-        """Send the completion screen after all questions in a session were used"""
-        total = session.get('total_questions', 0)
+        """Send the completion screen (with score) after all questions were answered"""
+        self.save_stats()  # persist score counters
+        text = self.build_session_result(session, stopped=False)
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart")],
             [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders")],
             [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
         ])
         await context.bot.send_message(
-            chat_id,
-            f"🎉 Quiz Completed!\n\n"
-            f"📚 Subject: {session.get('subject')}\n"
-            f"📁 Quiz Folder: {session.get('folder')}\n"
-            f"📝 Questions answered: {total}/{total}\n\n"
-            f"Great job! 🎓",
-            reply_markup=keyboard)
+            chat_id, text, reply_markup=keyboard)
     
     # ==========================================================
     # NEW: ADMIN QUIZ-SAVING FLOW (Subject → Folder → Polls → /done)
@@ -2257,7 +2327,8 @@ class QuizBot:
             
             f"🎮 **User Quizzes (/quiz)**\n"
             f"   • Sessions started: {self.stats.get('user_quiz_sessions', 0)}\n"
-            f"   • Questions served: {self.stats.get('user_quizzes_sent', 0)}\n\n"
+            f"   • Questions served: {self.stats.get('user_quizzes_sent', 0)}\n"
+            f"   • Correct answers: {self.stats.get('user_quiz_correct', 0)}\n\n"
             
             f"⚠️ **Quiz Reports**\n"
             f"   • Reports received: {quiz_reports_received}\n"
@@ -3418,8 +3489,6 @@ class QuizBot:
             await self.handle_qz_folder(update, context, data[8:])
         elif data.startswith("qz_start_"):
             await self.handle_qz_start(update, context, data[9:])
-        elif data.startswith("qz_next_"):
-            await self.handle_qz_next(update, context, data[8:])
         elif data == "qz_restart":
             await self.handle_qz_restart(update, context)
         elif data == "qz_back_subjects":
@@ -3523,9 +3592,14 @@ class QuizBot:
         self.application.add_handler(CommandHandler("addsudo", self.add_sudo_command))
         self.application.add_handler(CommandHandler("remsudo", self.remove_sudo_command))
         
-        # NEW: /quiz (any user, private chat only) and /done (admin exits quiz-saving mode)
+        # NEW: /quiz (any user, private chat only), /done (admin exits quiz-saving
+        # mode) and /stop (user ends their running quiz and sees the result)
         self.application.add_handler(CommandHandler("quiz", self.quiz_command))
         self.application.add_handler(CommandHandler("done", self.done_adding_command))
+        self.application.add_handler(CommandHandler("stop", self.stop_quiz_command))
+        
+        # NEW: grade answers + AUTO-SEND the next question when the user votes
+        self.application.add_handler(PollAnswerHandler(self.handle_poll_answer))
         
         # Handle both text messages and polls.
         # NOTE: The old second registration of handle_interval_input was dead code
@@ -3589,6 +3663,8 @@ class QuizBot:
         print(f"🗂 NEW: 'Manage Quiz Folders' in dashboard (view/create/rename/delete)")
         print(f"📝 NEW: Admin quiz-saving flow: Subject → Folder → send polls → /done")
         print(f"🎮 NEW: /quiz command for all users (private chat) with per-user sessions")
+        print(f"⚡ NEW: Auto-next — the next question is sent automatically after each answer")
+        print(f"🛑 NEW: /stop command ends a running quiz and shows the result with score")
         print(f"🎯 NEW: /rquiz [Subject] [Quiz Folder] optional filters")
         print(f"📦 Old quizzes migrated to: General → Uncategorized")
         
