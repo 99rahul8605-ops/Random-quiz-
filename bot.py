@@ -4461,7 +4461,14 @@ class QuizBot:
         print("🤖 Bot is starting...")
         await self.application.initialize()
         await self.application.start()
-        await self.application.updater.start_polling()
+        # FIX: clear any leftover webhook + pending updates before polling.
+        # Prevents "Conflict: terminated by other getUpdates request" when a
+        # webhook was set previously, or a stale connection is still open.
+        try:
+            await self.application.bot.delete_webhook(drop_pending_updates=True)
+        except Exception as e:
+            print(f"⚠️ delete_webhook skipped: {e}")
+        await self.application.updater.start_polling(drop_pending_updates=True)
         
         quiz_interval_hours = self.quiz_interval / 3600
         
