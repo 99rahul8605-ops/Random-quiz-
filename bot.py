@@ -200,6 +200,11 @@ class MongoDB:
         return 0
 
 class QuizBot:
+    # FIX: minimum per-question timer (seconds) forced on GROUP quizzes when no
+    # timer was chosen, so the poll stays open long enough for every member to
+    # vote instead of advancing the instant the first person answers.
+    GROUP_QUIZ_MIN_TIMER = 30
+    
     def __init__(self):
         self.application = None
         self.mongo = MongoDB(MONGODB_URI)
@@ -2039,6 +2044,14 @@ class QuizBot:
                 await context.bot.send_message(chat_id, text, reply_markup=keyboard)
             return
         
+        # FIX: mark group quizzes + guarantee a timer so the poll stays open long
+        # enough for every member to vote, instead of jumping to the next question
+        # the instant the FIRST person answers.
+        session['is_group'] = chat_id < 0
+        if session['is_group'] and secs <= 0:
+            secs = self.GROUP_QUIZ_MIN_TIMER
+            session['timer_seconds'] = secs
+        
         label = f"{folder} → 📂 {subfolder}" if subfolder else folder
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
         session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
@@ -2072,6 +2085,14 @@ class QuizBot:
             else:
                 await context.bot.send_message(chat_id, text, reply_markup=keyboard)
             return
+        
+        # FIX: mark group quizzes + guarantee a timer so the poll stays open long
+        # enough for every member to vote, instead of jumping to the next question
+        # the instant the FIRST person answers.
+        session['is_group'] = chat_id < 0
+        if session['is_group'] and secs <= 0:
+            secs = self.GROUP_QUIZ_MIN_TIMER
+            session['timer_seconds'] = secs
         
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
         session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
@@ -2114,6 +2135,15 @@ class QuizBot:
         if subfolders:
             sf_label = ", ".join(subfolders) if len(subfolders) <= 3 else f"{len(subfolders)} sub-folders selected"
             extra_lines += f"📂 Sub-folders: {sf_label}\n"
+        
+        # FIX: mark group quizzes + guarantee a timer so the poll stays open long
+        # enough for every member to vote, instead of jumping to the next question
+        # the instant the FIRST person answers.
+        session['is_group'] = chat_id < 0
+        if session['is_group'] and secs <= 0:
+            secs = self.GROUP_QUIZ_MIN_TIMER
+            session['timer_seconds'] = secs
+        
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
         session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
         intro = (
@@ -2142,10 +2172,26 @@ class QuizBot:
         if session.get('last_poll_id') != pa.poll_id:
             return
         
-        session['answered'] = session.get('answered', 0) + 1
         chosen = pa.option_ids[0] if pa.option_ids else None
         correct_id = session.get('last_correct_option_id')
         is_correct = chosen is not None and chosen == correct_id
+        
+        # FIX: In a GROUP quiz, other members are still meant to be answering the
+        # same poll. Previously we advanced to the next question the instant the
+        # FIRST vote came in, so everyone else never got a chance to answer.
+        # Now: for groups, just record this vote and let the poll stay open for
+        # its full timer — _auto_advance_on_timeout() moves to the next question
+        # once, after that window closes for everybody.
+        if session.get('is_group'):
+            session['answered'] = session.get('answered', 0) + 1
+            if is_correct:
+                session['score'] = session.get('score', 0) + 1
+                self.stats['user_quiz_correct'] = self.stats.get('user_quiz_correct', 0) + 1
+            self.save_stats()
+            return  # don't clear last_poll_id, don't advance yet — wait for the timer
+        
+        # --- Private-chat (single player) behaviour: unchanged, advance right away ---
+        session['answered'] = session.get('answered', 0) + 1
         if is_correct:
             session['score'] = session.get('score', 0) + 1
             self.stats['user_quiz_correct'] = self.stats.get('user_quiz_correct', 0) + 1
