@@ -1216,7 +1216,8 @@ class QuizBot:
                     f"🔄 **Reset Quizzes** - Delete all saved quizzes\n"
                     f"⚠️ **View Reports** - Check reported quizzes\n\n"
                     f"To add a quiz: 📝 Add Quiz → Subject → Folder → send Quiz Mode polls → /done",
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
                 )
             else:
                 bot_username = context.bot.username
@@ -1239,7 +1240,8 @@ class QuizBot:
                     "• /quiz - Browse subjects and quiz folders, then play right here in private chat!\n"
                     "• /stop - End your running quiz and see your score (next question comes automatically after each answer!)\n\n"
                     "Need help? Tap 🆘 Support below.",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
                 )
         else:
             # Bot added to a group - only for groups and supergroups
@@ -1387,6 +1389,8 @@ class QuizBot:
                 "2. Set the correct answer\n"
                 "3. Then send it to me\n\n"
                 "📝 I accept both anonymous and non-anonymous QUIZ MODE polls!"
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -2617,6 +2621,8 @@ class QuizBot:
                 "2. Reply to that quiz message\n"
                 "3. Send `/qreport`\n\n"
                 "The bot will forward the quiz to the admin for review."
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -2717,6 +2723,8 @@ class QuizBot:
                 "**Usage:** `/view <report_id>`\n\n"
                 "**Example:** `/view report_123456789_123`\n\n"
                 "You can find report IDs in the reports dashboard."
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -3034,6 +3042,8 @@ class QuizBot:
             "The quiz report has been marked as ignored.\n"
             "No action was taken on the quiz.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Close", callback_data="close_report")]])
+        ,
+            parse_mode='Markdown'
         )
     
     async def handle_view_similar(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
@@ -3392,6 +3402,8 @@ class QuizBot:
             f"🗑️ Deleted {deleted_count} resolved reports.\n"
             f"Only pending reports remain in the database.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 View Reports", callback_data="view_reports")]])
+        ,
+            parse_mode='Markdown'
         )
     
     async def handle_report_back(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
@@ -3438,6 +3450,8 @@ class QuizBot:
                 "If you're sure, use:\n"
                 "`/reset confirm`\n\n"
                 f"📝 Currently have: {len(self.quizzes)} quizzes"
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -3458,6 +3472,8 @@ class QuizBot:
             f"🗑️ Deleted {deleted_count} quizzes\n"
             f"📝 Quiz database is now empty\n\n"
             f"Use /start to add new quizzes!"
+        ,
+            parse_mode='Markdown'
         )
     
     async def reset_quizzes_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3482,6 +3498,8 @@ class QuizBot:
             f"❌ Groups will stop receiving quizzes\n\n"
             f"Are you absolutely sure?",
             reply_markup=reply_markup
+        ,
+            parse_mode='Markdown'
         )
     
     async def confirm_reset_quizzes(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3510,6 +3528,8 @@ class QuizBot:
             f"📝 Quiz database is now empty\n\n"
             f"Use the menu below to add new quizzes!",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz")]])
+        ,
+            parse_mode='Markdown'
         )
     
     async def set_explanation_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3732,6 +3752,8 @@ class QuizBot:
                 "• `/setdelay 90m` - 90 minutes\n"
                 "• `/setdelay 2` - 2 hours (default)\n\n"
                 f"**Current interval:** {self.quiz_interval / 3600} hours"
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -3748,6 +3770,8 @@ class QuizBot:
                 "• `90m` - 90 minutes\n"
                 "• `2` - 2 hours (default)\n\n"
                 f"**Current interval:** {self.quiz_interval / 3600} hours"
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -3775,6 +3799,8 @@ class QuizBot:
             f"📅 Old interval: {old_display}\n"
             f"📅 New interval: {display_time}\n\n"
             f"Next quiz will be sent in approximately {display_time}."
+        ,
+            parse_mode='Markdown'
         )
     
     async def set_quiz_interval_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3795,6 +3821,8 @@ class QuizBot:
             "• `90m` - 90 minutes\n"
             "• `2` - 2 hours (default)\n\n"
             "Current interval: {} hours".format(self.quiz_interval / 3600)
+        ,
+            parse_mode='Markdown'
         )
         
         # Set a flag to expect interval input
@@ -3820,6 +3848,8 @@ class QuizBot:
                 "• `90m` - 90 minutes\n"
                 "• `2` - 2 hours (default)\n\n"
                 f"**Current interval:** {self.quiz_interval / 3600} hours"
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -3849,6 +3879,8 @@ class QuizBot:
             f"📅 Old interval: {old_display}\n"
             f"📅 New interval: {display_time}\n\n"
             f"Next quiz will be sent in approximately {display_time}."
+        ,
+            parse_mode='Markdown'
         )
     
     async def start_broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4098,6 +4130,8 @@ class QuizBot:
             f"✅ **Cleaned {len(inactive_groups)} inactive groups**\n\n"
             f"Removed groups that were marked as inactive (likely removed the bot).\n"
             f"Current active groups: {len([g for g in self.groups if g.get('is_active', True)])}"
+        ,
+            parse_mode='Markdown'
         )
     
     async def reactivate_all_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4119,6 +4153,8 @@ class QuizBot:
         await update.callback_query.edit_message_text(
             f"✅ **All groups reactivated!**\n\n"
             f"All {len(self.groups)} groups have been marked as active and will receive quizzes."
+        ,
+            parse_mode='Markdown'
         )
     
     async def refresh_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4421,7 +4457,9 @@ class QuizBot:
             await update.message.reply_text(links_text, parse_mode='Markdown')
         
         # Send links-only section
-        await update.message.reply_text("📋 **Copy-paste section:**")
+        await update.message.reply_text("📋 **Copy-paste section:**",
+            parse_mode='Markdown'
+        )
         if len(links_only) > 4000:
             # Save to file if too long
             with open('group_links.txt', 'w', encoding='utf-8') as f:
@@ -4448,6 +4486,8 @@ class QuizBot:
                 "❌ Please provide a user ID.\n\n"
                 "**Usage:** `/addsudo <user_id>`\n\n"
                 "You can get a user's ID by having them send any message to the bot."
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -4472,6 +4512,8 @@ class QuizBot:
             f"✅ **Sudo user added!**\n\n"
             f"User ID: `{new_sudo_id}`\n\n"
             f"This user can now use all admin commands."
+        ,
+            parse_mode='Markdown'
         )
     
     # NEW: Remove sudo user command (only main admin can use)
@@ -4486,6 +4528,8 @@ class QuizBot:
             await update.message.reply_text(
                 "❌ Please provide a user ID.\n\n"
                 "**Usage:** `/remsudo <user_id>`"
+                ,
+                parse_mode='Markdown'
             )
             return
         
@@ -4506,6 +4550,8 @@ class QuizBot:
             f"✅ **Sudo user removed!**\n\n"
             f"User ID: `{sudo_id}`\n\n"
             f"This user no longer has admin privileges."
+        ,
+            parse_mode='Markdown'
         )
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
