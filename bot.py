@@ -1120,12 +1120,15 @@ class QuizBot:
         group. Used so non-admin members can't tap the quiz-setup buttons either,
         not just be blocked from typing /quiz itself."""
         if self.is_admin(user_id):
+            print(f"🔐 quiz-access check: user {user_id} in chat {chat_id} -> ALLOWED (bot admin/sudo)")
             return True
         try:
             chat_member = await context.bot.get_chat_member(chat_id, user_id)
-            return chat_member.status in ['administrator', 'creator']
+            allowed = chat_member.status in ['administrator', 'creator']
+            print(f"🔐 quiz-access check: user {user_id} in chat {chat_id} -> status='{chat_member.status}' -> {'ALLOWED' if allowed else 'DENIED'}")
+            return allowed
         except Exception as e:
-            print(f"Error checking admin status: {e}")
+            print(f"🔐 quiz-access check: user {user_id} in chat {chat_id} -> ERROR checking status ({e}) -> DENIED")
             return False
         
     def save_quiz(self, quiz):
@@ -1746,6 +1749,7 @@ class QuizBot:
         if chat_type in ['group', 'supergroup']:
             user_id = update.effective_user.id
             chat_id = update.effective_chat.id
+            print(f"🔐 /quiz command by {user_id} in group {chat_id} — checking access...")
             if not await self.is_quiz_allowed_user(context, chat_id, user_id):
                 await update.message.reply_text("❌ Only group admins can use /quiz here!")
                 return
@@ -4772,6 +4776,7 @@ class QuizBot:
         if data.startswith("qz") and update.effective_chat.id < 0:
             chat_id = update.effective_chat.id
             user_id = update.effective_user.id
+            print(f"🔐 quiz button '{data}' tapped by {user_id} in group {chat_id} — checking access...")
             if not await self.is_quiz_allowed_user(context, chat_id, user_id):
                 await query.answer("❌ Only group admins can use this!", show_alert=True)
                 return
