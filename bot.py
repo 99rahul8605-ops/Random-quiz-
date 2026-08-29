@@ -1113,6 +1113,20 @@ class QuizBot:
     def is_admin(self, user_id):
         """Check if user is bot admin (main admin or sudo user)"""
         return user_id == ADMIN_USER_ID or user_id in self.sudo_users
+    
+    async def is_quiz_allowed_user(self, context, chat_id, user_id):
+        """FIX: shared check for the WHOLE /quiz flow (command + every button that
+        follows it) — bot admin/sudo, OR a real Telegram admin/creator of that
+        group. Used so non-admin members can't tap the quiz-setup buttons either,
+        not just be blocked from typing /quiz itself."""
+        if self.is_admin(user_id):
+            return True
+        try:
+            chat_member = await context.bot.get_chat_member(chat_id, user_id)
+            return chat_member.status in ['administrator', 'creator']
+        except Exception as e:
+            print(f"Error checking admin status: {e}")
+            return False
         
     def save_quiz(self, quiz):
         """Save quiz to MongoDB"""
@@ -1732,15 +1746,7 @@ class QuizBot:
         if chat_type in ['group', 'supergroup']:
             user_id = update.effective_user.id
             chat_id = update.effective_chat.id
-            is_admin = self.is_admin(user_id)
-            if not is_admin:
-                try:
-                    chat_member = await context.bot.get_chat_member(chat_id, user_id)
-                    if chat_member.status in ['administrator', 'creator']:
-                        is_admin = True
-                except Exception as e:
-                    print(f"Error checking admin status: {e}")
-            if not is_admin:
+            if not await self.is_quiz_allowed_user(context, chat_id, user_id):
                 await update.message.reply_text("❌ Only group admins can use /quiz here!")
                 return
         elif chat_type != 'private':
@@ -4755,9 +4761,22 @@ class QuizBot:
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard button presses"""
         query = update.callback_query
-        await query.answer()
-        
         data = query.data
+        
+        # FIX: /quiz is admin-only in groups, but the buttons it shows (subject →
+        # folder → start → count → timer → restart) were tappable by ANY member,
+        # since only the /quiz command itself checked admin status. Guard every
+        # button belonging to that flow the same way, in groups only.
+        # NOTE: a callback query can only be answered ONCE, so this check has to
+        # happen before the normal query.answer() below, not after it.
+        if data.startswith("qz") and update.effective_chat.id < 0:
+            chat_id = update.effective_chat.id
+            user_id = update.effective_user.id
+            if not await self.is_quiz_allowed_user(context, chat_id, user_id):
+                await query.answer("❌ Only group admins can use this!", show_alert=True)
+                return
+        
+        await query.answer()
         
         if data == "stats":
             await self.show_stats(update, context)
