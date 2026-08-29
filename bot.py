@@ -29,27 +29,61 @@ MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/quizbot')
 SUPPORT_USERNAME = os.getenv('SUPPORT_USERNAME', '').lstrip('@').strip()
 
 # NEW: Reset & set the Telegram "/" command menu — a short, clean list for everyone,
-# and the full admin list scoped to just the admin's own private chat.
-def reset_and_set_commands():
+# and the full admin list scoped to just each admin's own private chat.
+def reset_and_set_commands(extra_admin_ids=None):
+    """extra_admin_ids: optional iterable of sudo-admin user_ids who should also
+    get the full admin command list in their own private chat with the bot."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
+    delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMyCommands"
 
-    # Reset old commands (both the default/public scope and the admin's private scope)
-    requests.post(url, json={"commands": []})
-    requests.post(url, json={
-        "commands": [],
-        "scope": {"type": "chat", "chat_id": ADMIN_USER_ID}
-    })
+    admin_ids = {ADMIN_USER_ID, *(extra_admin_ids or [])}
 
-    # New premium-style commands — shown to every user (default scope: all private chats)
+    def _post(payload, label):
+        try:
+            r = requests.post(url, json=payload, timeout=10)
+            ok = r.ok and r.json().get('ok', False)
+            if not ok:
+                print(f"⚠️ setMyCommands ({label}) failed: {r.text[:200]}")
+        except Exception as e:
+            print(f"⚠️ setMyCommands ({label}) error: {e}")
+
+    def _delete(scope, label):
+        try:
+            payload = {"scope": scope} if scope else {}
+            r = requests.post(delete_url, json=payload, timeout=10)
+            ok = r.ok and r.json().get('ok', False)
+            if not ok:
+                print(f"⚠️ deleteMyCommands ({label}) failed: {r.text[:200]}")
+        except Exception as e:
+            print(f"⚠️ deleteMyCommands ({label}) error: {e}")
+
+    # Clear EVERY scope that could be showing a stale/full command list to
+    # normal users — not just "default". If commands were ever set on
+    # all_private_chats / all_group_chats (e.g. via BotFather or an older
+    # version of this bot), those scopes outrank "default" and would keep
+    # showing every command to everyone even after we reset "default".
+    _delete(None, "default")
+    _delete({"type": "all_private_chats"}, "all_private_chats")
+    _delete({"type": "all_group_chats"}, "all_group_chats")
+    _delete({"type": "all_chat_administrators"}, "all_chat_administrators")
+    for admin_id in admin_ids:
+        _delete({"type": "chat", "chat_id": admin_id}, f"chat:{admin_id}")
+
+    # New premium-style commands — shown to every regular user.
+    # Set on BOTH all_private_chats and all_group_chats explicitly (instead of
+    # relying on the lower-priority "default" scope) so this list always wins
+    # over anything else that might still be lurking on the default scope.
     commands = [
         {"command": "start", "description": "🚀 Launch the bot"},
         {"command": "quiz", "description": "🎮 Browse & play a quiz"},
         {"command": "stop", "description": "🛑 Stop your running quiz"},
         {"command": "qreport", "description": "⚠️ Report a wrong quiz"},
     ]
-    requests.post(url, json={"commands": commands})
+    _post({"commands": commands, "scope": {"type": "all_private_chats"}}, "public/all_private_chats")
+    _post({"commands": commands, "scope": {"type": "all_group_chats"}}, "public/all_group_chats")
+    _post({"commands": commands}, "public/default")  # harmless fallback
 
-    # Full admin command list — only visible inside the admin's own private chat
+    # Full admin command list — only visible inside each admin's own private chat.
     admin_commands = [
         {"command": "start", "description": "👋 Open Admin Dashboard"},
         {"command": "quiz", "description": "🎮 Browse & play a quiz"},
@@ -71,10 +105,12 @@ def reset_and_set_commands():
         {"command": "remsudo", "description": "➖ Remove a sudo admin"},
         {"command": "done", "description": "✅ Finish adding quizzes"},
     ]
-    requests.post(url, json={
-        "commands": admin_commands,
-        "scope": {"type": "chat", "chat_id": ADMIN_USER_ID}
-    })
+    for admin_id in admin_ids:
+        _post({
+            "commands": admin_commands,
+            "scope": {"type": "chat", "chat_id": admin_id}
+        }, f"admin/chat:{admin_id}")
+
 
 # Global bot instance
 bot_instance = None
@@ -4745,6 +4781,12 @@ class QuizBot:
         # Save to database
         self.save_sudo_user(new_sudo_id)
         
+        # Give the new sudo user the full admin "/" command menu right away
+        try:
+            reset_and_set_commands(extra_admin_ids=self.sudo_users)
+        except Exception as e:
+            print(f"⚠️ Could not refresh command menu after addsudo: {e}")
+        
         await update.message.reply_text(
             f"✅ *Sudo user added!*\n\n"
             f"User ID: `{new_sudo_id}`\n\n"
@@ -4782,6 +4824,13 @@ class QuizBot:
         
         # Remove from database
         self.remove_sudo_user(sudo_id)
+        
+        # Strip that user's admin "/" command menu — falls back to the public list
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMyCommands"
+            requests.post(url, json={"scope": {"type": "chat", "chat_id": sudo_id}}, timeout=10)
+        except Exception as e:
+            print(f"⚠️ Could not refresh command menu after remsudo: {e}")
         
         await update.message.reply_text(
             f"✅ *Sudo user removed!*\n\n"
@@ -5805,7 +5854,7 @@ class QuizBot:
         
         # NEW: reset & set a clean "/" command menu (public list + full admin list)
         try:
-            reset_and_set_commands()
+            reset_and_set_commands(extra_admin_ids=self.sudo_users)
             print("📋 Command menu updated (public + admin)")
         except Exception as e:
             print(f"⚠️ Could not update command menu: {e}")
