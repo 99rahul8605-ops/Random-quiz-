@@ -242,6 +242,12 @@ class QuizBot:
         self.poll_quiz_map = {}
         # NEW: token -> (quiz_id, report_id) for the admin "Edit / Replace Quiz" flow
         self.edit_ctx_tokens = {}
+        # FIX: group quizzes are a SHARED activity, not one person's private session —
+        # keep the live session per chat_id here (not just in the starter's user_data)
+        # so ANY member's poll answer can be found and graded, and everyone's score
+        # can be shown in the final leaderboard. In-memory only, resets on restart.
+        self.group_sessions = {}       # chat_id (negative) -> session dict
+        self.poll_id_to_chat = {}      # poll_id -> chat_id, for group quizzes only
     
     # ==========================================================
     # NEW: HIERARCHICAL QUIZ HELPERS (Subject → Folder → Questions)
@@ -597,10 +603,15 @@ class QuizBot:
         self.save_stats()
         return session
     
-    def get_next_quiz_question(self, context):
+    def get_next_quiz_question(self, context, chat_id):
         """Pop the next quiz for the active session.
+        FIX: group quizzes (chat_id < 0) live in self.group_sessions (shared by the
+        whole chat); private/DM quizzes stay in the per-user context.user_data.
         Returns (session, quiz) — quiz is None when the session is finished."""
-        session = context.user_data.get('quiz_session')
+        if chat_id < 0:
+            session = self.group_sessions.get(chat_id)
+        else:
+            session = context.user_data.get('quiz_session')
         if not session:
             return None, None
         if not session.get('remaining_quiz_ids'):
@@ -610,7 +621,7 @@ class QuizBot:
         quiz = self.get_quiz_by_id(quiz_id)
         if quiz is None:
             # Quiz was deleted mid-session → skip to the next one
-            return self.get_next_quiz_question(context)
+            return self.get_next_quiz_question(context, chat_id)
         return session, quiz
     
     # ==========================================================
@@ -1740,6 +1751,8 @@ class QuizBot:
         
         # Fresh browsing clears any old session (stale Next buttons become no-ops)
         context.user_data['quiz_session'] = None
+        if update.effective_chat.id < 0:
+            self.group_sessions.pop(update.effective_chat.id, None)
         
         text, keyboard = self.build_user_subject_menu()
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -2051,6 +2064,10 @@ class QuizBot:
         if session['is_group'] and secs <= 0:
             secs = self.GROUP_QUIZ_MIN_TIMER
             session['timer_seconds'] = secs
+        if session['is_group']:
+            # FIX: keep the shared session reachable by chat_id so any member's
+            # poll answer (not just the person who ran /quiz) can be graded.
+            self.group_sessions[chat_id] = session
         
         label = f"{folder} → 📂 {subfolder}" if subfolder else folder
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
@@ -2093,6 +2110,10 @@ class QuizBot:
         if session['is_group'] and secs <= 0:
             secs = self.GROUP_QUIZ_MIN_TIMER
             session['timer_seconds'] = secs
+        if session['is_group']:
+            # FIX: keep the shared session reachable by chat_id so any member's
+            # poll answer (not just the person who ran /quiz) can be graded.
+            self.group_sessions[chat_id] = session
         
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
         session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
@@ -2143,6 +2164,10 @@ class QuizBot:
         if session['is_group'] and secs <= 0:
             secs = self.GROUP_QUIZ_MIN_TIMER
             session['timer_seconds'] = secs
+        if session['is_group']:
+            # FIX: keep the shared session reachable by chat_id so any member's
+            # poll answer (not just the person who ran /quiz) can be graded.
+            self.group_sessions[chat_id] = session
         
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
         session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
@@ -2163,8 +2188,48 @@ class QuizBot:
     
     async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """NEW: Grade the user's answer, then AUTOMATICALLY send the next question.
-        Fires when the user votes in a non-anonymous quiz poll."""
+        Fires when the user votes in a non-anonymous quiz poll.
+        FIX: group quizzes are resolved via poll_id_to_chat (chat-scoped shared
+        session) so ANY member's vote is graded and attributed to their name —
+        not just the person who originally ran /quiz."""
         pa = update.poll_answer
+        group_chat_id = self.poll_id_to_chat.get(pa.poll_id)
+        
+        if group_chat_id is not None:
+            # ---------- GROUP quiz: shared session, per-member leaderboard ----------
+            session = self.group_sessions.get(group_chat_id)
+            if not session or session.get('completed'):
+                return
+            if session.get('last_poll_id') != pa.poll_id:
+                return
+            
+            chosen = pa.option_ids[0] if pa.option_ids else None
+            correct_id = session.get('last_correct_option_id')
+            is_correct = chosen is not None and chosen == correct_id
+            
+            # Track this member's own name + score for the group leaderboard
+            participants = session.setdefault('participants', {})
+            uid = str(pa.user.id)
+            name = pa.user.full_name or (f"@{pa.user.username}" if pa.user.username else f"User {pa.user.id}")
+            entry = participants.setdefault(uid, {'name': name, 'score': 0, 'answered': 0})
+            entry['name'] = name  # keep it fresh in case it changed
+            entry['answered'] += 1
+            if is_correct:
+                entry['score'] += 1
+                self.stats['user_quiz_correct'] = self.stats.get('user_quiz_correct', 0) + 1
+            
+            session['answered'] = session.get('answered', 0) + 1
+            if is_correct:
+                session['score'] = session.get('score', 0) + 1
+            self.save_stats()
+            
+            # FIX: don't advance the instant ONE member answers — leave the poll
+            # open (last_poll_id untouched) so everyone else can still vote.
+            # _auto_advance_on_timeout() moves on for the whole group once, when
+            # the timer actually runs out — no more "Time's up" spam either.
+            return
+        
+        # ---------- Private/DM quiz: unchanged single-player behaviour ----------
         session = context.user_data.get('quiz_session')
         if not session or session.get('completed'):
             return
@@ -2176,21 +2241,6 @@ class QuizBot:
         correct_id = session.get('last_correct_option_id')
         is_correct = chosen is not None and chosen == correct_id
         
-        # FIX: In a GROUP quiz, other members are still meant to be answering the
-        # same poll. Previously we advanced to the next question the instant the
-        # FIRST vote came in, so everyone else never got a chance to answer.
-        # Now: for groups, just record this vote and let the poll stay open for
-        # its full timer — _auto_advance_on_timeout() moves to the next question
-        # once, after that window closes for everybody.
-        if session.get('is_group'):
-            session['answered'] = session.get('answered', 0) + 1
-            if is_correct:
-                session['score'] = session.get('score', 0) + 1
-                self.stats['user_quiz_correct'] = self.stats.get('user_quiz_correct', 0) + 1
-            self.save_stats()
-            return  # don't clear last_poll_id, don't advance yet — wait for the timer
-        
-        # --- Private-chat (single player) behaviour: unchanged, advance right away ---
         session['answered'] = session.get('answered', 0) + 1
         if is_correct:
             session['score'] = session.get('score', 0) + 1
@@ -2246,10 +2296,33 @@ class QuizBot:
             header_lines = f"📚 Subject: {session.get('subject')}\n📁 Quiz Folder: {folder_label}\n"
         timer = session.get('timer_seconds', 0)
         timer_label = ("1 min" if timer == 60 else f"{timer} sec") if timer else "No limit"
+        
+        is_group = bool(session.get('is_group'))
         text = (
             f"{title}\n\n"
             f"{header_lines}"
             f"⏱ Timer: {timer_label} per question\n\n"
+        )
+        
+        if is_group:
+            # FIX: group quizzes show a leaderboard — everyone's name + score —
+            # instead of a single "Your Score" line that only meant one person.
+            participants = session.get('participants') or {}
+            text += f"📝 Questions: {total}\n\n"
+            if participants:
+                ranked = sorted(participants.values(), key=lambda p: (-p['score'], -p['answered']))
+                medals = ["🥇", "🥈", "🥉"]
+                text += "🏆 Leaderboard:\n"
+                for i, p in enumerate(ranked):
+                    rank_icon = medals[i] if i < len(medals) else f"{i + 1}."
+                    acc = f" ({p['score'] / p['answered'] * 100:.0f}%)" if p['answered'] else ""
+                    text += f"{rank_icon} {p['name']} — {p['score']}/{p['answered']}{acc}\n"
+            else:
+                text += "😔 Nobody answered any question.\n"
+            text += "\nWell played, everyone! 🎓" if not stopped else "\nCome back anytime! 💪"
+            return text
+        
+        text += (
             f"🏆 Your Score: {score}/{answered}\n"
             f"📝 Questions: {answered}/{total} attempted\n"
         )
@@ -2260,8 +2333,12 @@ class QuizBot:
     
     async def stop_quiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """NEW: Handle /stop — end the running quiz session and show the result.
-        Works in private chat AND in a group (for whoever started that quiz there)."""
-        session = context.user_data.get('quiz_session')
+        Works in private chat AND in a group (ends the shared quiz for everyone)."""
+        chat_id = update.effective_chat.id
+        if chat_id < 0:
+            session = self.group_sessions.get(chat_id)
+        else:
+            session = context.user_data.get('quiz_session')
         if not session or session.get('completed'):
             await update.message.reply_text(
                 "ℹ️ You have no quiz running.\n"
@@ -2282,7 +2359,11 @@ class QuizBot:
     async def handle_qz_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """User tapped 'Restart This Quiz' on the completion screen"""
         query = update.callback_query
-        session = context.user_data.get('quiz_session')
+        chat_id = query.message.chat_id
+        if chat_id < 0:
+            session = self.group_sessions.get(chat_id)
+        else:
+            session = context.user_data.get('quiz_session')
         is_subj_multi = bool(session and session.get('is_subj_multi'))
         is_multi = bool(session and session.get('is_multi') and not is_subj_multi)
         if is_subj_multi:
@@ -2319,7 +2400,7 @@ class QuizBot:
     
     async def send_session_question(self, context: ContextTypes.DEFAULT_TYPE, chat_id):
         """Send the next question of the active user quiz session (or completion)"""
-        session, quiz = self.get_next_quiz_question(context)
+        session, quiz = self.get_next_quiz_question(context, chat_id)
         if not session:
             await context.bot.send_message(
                 chat_id, "⚠️ No active quiz session. Use /quiz to start a new quiz!")
@@ -2350,7 +2431,7 @@ class QuizBot:
         
         message = await context.bot.send_poll(
             chat_id=chat_id,
-            question=f"❓ {quiz['question']}",
+            question=f"Q{session.get('current_question', 0)}. {quiz['question']}",
             options=quiz['options'],
             is_anonymous=False,
             allows_multiple_answers=False,
@@ -2367,6 +2448,12 @@ class QuizBot:
         session['last_correct_option_id'] = quiz['correct_option_id']
         session['last_options'] = quiz['options']
         
+        # FIX: for group quizzes, remember which chat this poll belongs to —
+        # poll_answer updates don't carry chat info, only the poll_id, so this
+        # is how we find the right shared session no matter who votes.
+        if chat_id < 0:
+            self.poll_id_to_chat[message.poll.id] = chat_id
+        
         # NEW: remember which DB quiz this poll came from, so /qreport can find it precisely
         self.poll_quiz_map[f"{chat_id}:{message.message_id}"] = str(quiz['_id'])
         
@@ -2376,10 +2463,13 @@ class QuizBot:
                 self._auto_advance_on_timeout(context, chat_id, message.poll.id, timer_seconds))
     
     async def _auto_advance_on_timeout(self, context: ContextTypes.DEFAULT_TYPE, chat_id, poll_id, delay):
-        """NEW: If the user hasn't answered by the time the poll's open_period ends,
+        """NEW: If nobody answered by the time the poll's open_period ends,
         count it as attempted (wrong) and automatically move to the next question."""
         await asyncio.sleep(delay + 2)  # small buffer so Telegram has closed the poll
-        session = context.user_data.get('quiz_session')
+        if chat_id < 0:
+            session = self.group_sessions.get(chat_id)
+        else:
+            session = context.user_data.get('quiz_session')
         if not session or session.get('completed'):
             return
         if session.get('last_poll_id') != poll_id:
@@ -2387,10 +2477,13 @@ class QuizBot:
         session['answered'] = session.get('answered', 0) + 1
         session['last_poll_id'] = None
         self.save_stats()
-        try:
-            await context.bot.send_message(chat_id, "⏰ Time's up!\n\n➡️ Next question...")
-        except Exception as e:
-            print(f"⚠️ Could not send timeout message: {e}")
+        # FIX: this filler message shouldn't appear in group quizzes — it just
+        # spams the chat between questions. Keep it for private (solo) quizzes.
+        if not session.get('is_group'):
+            try:
+                await context.bot.send_message(chat_id, "⏰ Time's up!\n\n➡️ Next question...")
+            except Exception as e:
+                print(f"⚠️ Could not send timeout message: {e}")
         await self.send_session_question(context, chat_id)
     
     async def send_session_complete(self, context: ContextTypes.DEFAULT_TYPE, chat_id, session):
