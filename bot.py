@@ -8,10 +8,36 @@ import re
 import hashlib
 import requests
 import html as html_lib
+from urllib.parse import quote as url_quote
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
+from telegram import Update, InlineKeyboardButton as _PTBInlineKeyboardButton, InlineKeyboardMarkup, Poll
+import inspect as _inspect
+
+# COMPAT SHIM: the colored-button "style" field (Bot API 9.4) is only
+# supported by python-telegram-bot >= 22.7. If an older version is
+# installed, InlineKeyboardButton(..., style='primary') raises
+# TypeError: unexpected keyword argument 'style' and crashes every
+# handler that builds a keyboard. This wrapper silently drops
+# 'style'/'icon_custom_emoji_id' on older installs so the bot keeps
+# working (just without colors) instead of crashing — and automatically
+# starts showing colors again the moment the library is upgraded, with
+# no further code changes needed.
+_ptb_params = _inspect.signature(_PTBInlineKeyboardButton.__init__).parameters
+_PTB_SUPPORTS_STYLE = 'style' in _ptb_params
+if not _PTB_SUPPORTS_STYLE:
+    print("⚠️ Installed python-telegram-bot does not support button 'style' "
+          "(needs >= 22.7). Buttons will render without colors until you run: "
+          "pip install --upgrade \"python-telegram-bot>=22.7\"")
+
+class InlineKeyboardButton(_PTBInlineKeyboardButton):
+    def __init__(self, *args, **kwargs):
+        if not _PTB_SUPPORTS_STYLE:
+            kwargs.pop('style', None)
+            kwargs.pop('icon_custom_emoji_id', None)
+        super().__init__(*args, **kwargs)
+
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PollAnswerHandler
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
@@ -704,7 +730,7 @@ class QuizBot:
         keyboard.append(control_row)
         if selected:
             keyboard.append([InlineKeyboardButton(
-                f"➡️ Next ({n} selected)", callback_data="qzsm_start", style='primary')])
+                f"➡️ Next ({n} selected)", callback_data="qzsm_start", style='success')])
         keyboard.append([InlineKeyboardButton("🔙 Single-Select Mode", callback_data="qz_back_subjects", style='primary')])
         return text, keyboard
     
@@ -735,7 +761,7 @@ class QuizBot:
         keyboard.append(control_row)
         if selected:
             keyboard.append([InlineKeyboardButton(
-                f"➡️ Next ({n} selected)", callback_data="qzsmch_next", style='primary')])
+                f"➡️ Next ({n} selected)", callback_data="qzsmch_next", style='success')])
         keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode", style='primary')])
         return text, keyboard
     
@@ -1329,6 +1355,19 @@ class QuizBot:
         chat_type = update.effective_chat.type
         
         if chat_type == 'private':
+            # NEW: deep-link from a group's "▶️ Start This Quiz in DM" button —
+            # payload looks like /start qzdl_<token>, jump straight to that
+            # subject/folder's "Start Quiz" screen instead of the generic welcome.
+            if context.args and context.args[0].startswith('qzdl_'):
+                token = context.args[0][len('qzdl_'):]
+                ctx = self.resolve_qz_ctx(token)
+                if ctx:
+                    subject, folder, subfolder = ctx
+                    text, keyboard = self.build_user_folder_start(subject, folder, subfolder)
+                    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+                    return
+                # token not resolvable (e.g. bot restarted) — fall through to normal welcome
+            
             if self.is_admin(user_id):
                 keyboard = [
                     [InlineKeyboardButton("📊 View Statistics", callback_data="stats", style='primary')],
@@ -2340,6 +2379,31 @@ class QuizBot:
         
         await self.send_session_question(context, chat_id)
     
+    def build_group_quiz_end_keyboard(self, session, bot_username):
+        """NEW: Group-only quiz completion keyboard —
+        'Start This Quiz in DM' (deep-links straight into this same subject/folder
+        in the user's private chat), 'Share this Quiz' (opens Telegram's native
+        share sheet so it can be forwarded to another chat), and
+        'Add this Bot in Group' (adds the bot to a new group)."""
+        # Build a deep-link start payload that reopens this exact subject/folder/
+        # sub-folder in the user's DM. Only possible for a single-folder session
+        # (not a multi-subject/multi-chapter one) since those need a fresh pick.
+        start_url = f"https://t.me/{bot_username}"
+        subject = session.get('subject')
+        folder = session.get('folder')
+        if subject and folder and not session.get('is_subj_multi') and not session.get('is_multi'):
+            token = self.register_qz_ctx(subject, folder, session.get('subfolder', ''))
+            start_url = f"https://t.me/{bot_username}?start=qzdl_{token}"
+        
+        share_text = "🎯 Come play this quiz with us! Tap below to start:"
+        share_url = f"https://t.me/share/url?url={url_quote(start_url, safe='')}&text={url_quote(share_text, safe='')}"
+        
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("▶️ Start This Quiz in DM", url=start_url, style='success')],
+            [InlineKeyboardButton("📤 Share this Quiz", url=share_url, style='primary')],
+            [InlineKeyboardButton("➕ Add this Bot in Group", url=f"https://t.me/{bot_username}?startgroup=true", style='primary')]
+        ])
+    
     def build_session_result(self, session, stopped=False):
         """NEW: Result text with score for a finished/stopped session"""
         total = session.get('total_questions', 0)
@@ -2421,11 +2485,14 @@ class QuizBot:
         self.save_stats()  # persist score counters
         
         text = self.build_session_result(session, stopped=True)
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart", style='primary')],
-            [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders", style='primary')],
-            [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
-        ])
+        if session.get('is_group'):
+            keyboard = self.build_group_quiz_end_keyboard(session, context.bot.username)
+        else:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart", style='primary')],
+                [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders", style='primary')],
+                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
+            ])
         await update.message.reply_text(text, reply_markup=keyboard)
     
     async def handle_qz_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2562,11 +2629,14 @@ class QuizBot:
         """Send the completion screen (with score) after all questions were answered"""
         self.save_stats()  # persist score counters
         text = self.build_session_result(session, stopped=False)
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart", style='primary')],
-            [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders", style='primary')],
-            [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
-        ])
+        if session.get('is_group'):
+            keyboard = self.build_group_quiz_end_keyboard(session, context.bot.username)
+        else:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart", style='primary')],
+                [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders", style='primary')],
+                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
+            ])
         await context.bot.send_message(
             chat_id, text, reply_markup=keyboard)
     
