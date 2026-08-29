@@ -670,16 +670,16 @@ class QuizBot:
         subjects = structure['subjects']
         if not subjects:
             return ("📚 Select a Subject:\n\n😔 No quiz subjects available yet.\nPlease check back later!",
-                    [[InlineKeyboardButton("🔄 Refresh", callback_data="qz_back_subjects")]])
+                    [[InlineKeyboardButton("🔄 Refresh", callback_data="qz_back_subjects", style='primary')]])
         text = "📚 Select a Subject:"
         keyboard = []
         for name in sorted(subjects.keys()):
             token = self.register_subject_token(name)
-            keyboard.append([InlineKeyboardButton(f"📚 {name} ({subjects[name]})", callback_data=f"qz_subj_{token}")])
+            keyboard.append([InlineKeyboardButton(f"📚 {name} ({subjects[name]})", callback_data=f"qz_subj_{token}", style='primary')])
         # NEW: let the user pick more than one subject/quiz-list at once
         keyboard.append([InlineKeyboardButton(
-            "☑️ Select Multiple Subjects", callback_data="qzsm_mode")])
-        keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="qz_back_subjects")])
+            "☑️ Select Multiple Subjects", callback_data="qzsm_mode", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="qz_back_subjects", style='primary')])
         return text, keyboard
     
     def build_user_subject_multi_menu(self, selected):
@@ -696,16 +696,16 @@ class QuizBot:
             checkbox = "☑️" if name in selected else "⬜"
             token = self.register_subject_token(name)
             keyboard.append([InlineKeyboardButton(
-                f"{checkbox} {name} ({subjects[name]})", callback_data=f"qzsm_tgl_{token}")])
+                f"{checkbox} {name} ({subjects[name]})", callback_data=f"qzsm_tgl_{token}", style='primary')])
         control_row = [
-            InlineKeyboardButton("✅ Select All", callback_data="qzsm_all"),
-            InlineKeyboardButton("◻️ Clear All", callback_data="qzsm_clr")
+            InlineKeyboardButton("✅ Select All", callback_data="qzsm_all", style='primary'),
+            InlineKeyboardButton("◻️ Clear All", callback_data="qzsm_clr", style='primary')
         ]
         keyboard.append(control_row)
         if selected:
             keyboard.append([InlineKeyboardButton(
-                f"➡️ Next ({n} selected)", callback_data="qzsm_start")])
-        keyboard.append([InlineKeyboardButton("🔙 Single-Select Mode", callback_data="qz_back_subjects")])
+                f"➡️ Next ({n} selected)", callback_data="qzsm_start", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Single-Select Mode", callback_data="qz_back_subjects", style='primary')])
         return text, keyboard
     
     def build_subjmulti_chapter_menu(self, subjects, selected):
@@ -717,7 +717,7 @@ class QuizBot:
         if not folders:
             text = (f"☑️ Select Multiple Chapters\n\n📚 Subjects: {subj_label}\n\n"
                     f"😔 No chapters found under the selected subjects.")
-            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode")]]
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode", style='primary')]]
             return text, keyboard
         text = (f"☑️ Select Multiple Chapters\n\n📚 Subjects: {subj_label}\n\n"
                 f"Tap chapters to select/unselect them. You can pick as many as you like.\n\n"
@@ -727,16 +727,16 @@ class QuizBot:
             checkbox = "☑️" if name in selected else "⬜"
             token = self.register_name_token(name)
             keyboard.append([InlineKeyboardButton(
-                f"{checkbox} {name} ({folders[name]})", callback_data=f"qzsmch_tgl_{token}")])
+                f"{checkbox} {name} ({folders[name]})", callback_data=f"qzsmch_tgl_{token}", style='primary')])
         control_row = [
-            InlineKeyboardButton("✅ Select All", callback_data="qzsmch_all"),
-            InlineKeyboardButton("◻️ Clear All", callback_data="qzsmch_clr")
+            InlineKeyboardButton("✅ Select All", callback_data="qzsmch_all", style='primary'),
+            InlineKeyboardButton("◻️ Clear All", callback_data="qzsmch_clr", style='primary')
         ]
         keyboard.append(control_row)
         if selected:
             keyboard.append([InlineKeyboardButton(
-                f"➡️ Next ({n} selected)", callback_data="qzsmch_next")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode")])
+                f"➡️ Next ({n} selected)", callback_data="qzsmch_next", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode", style='primary')])
         return text, keyboard
     
     def build_subjmulti_subfolder_menu(self, subjects, folders, selected):
@@ -758,15 +758,15 @@ class QuizBot:
                 'subject': {'$in': list(subjects)}, 'folder': {'$in': list(folders)},
                 'subfolder': name, 'is_active': True})
             keyboard.append([InlineKeyboardButton(
-                f"{checkbox} {name} ({cnt})", callback_data=f"qzsmsf_tgl_{token}")])
+                f"{checkbox} {name} ({cnt})", callback_data=f"qzsmsf_tgl_{token}", style='primary')])
         control_row = [
-            InlineKeyboardButton("✅ Select All", callback_data="qzsmsf_all"),
-            InlineKeyboardButton("◻️ Clear All", callback_data="qzsmsf_clr")
+            InlineKeyboardButton("✅ Select All", callback_data="qzsmsf_all", style='primary'),
+            InlineKeyboardButton("◻️ Clear All", callback_data="qzsmsf_clr", style='primary')
         ]
         keyboard.append(control_row)
         start_label = f"▶️ Start Quiz ({n} selected)" if n else "▶️ Start Quiz (All)"
-        keyboard.append([InlineKeyboardButton(start_label, callback_data="qzsmsf_start")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsmch_show")])
+        keyboard.append([InlineKeyboardButton(start_label, callback_data="qzsmsf_start", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsmch_show", style='primary')])
         return text, keyboard
     
     def build_subjmulti_full_count_menu(self, subjects, folders, subfolders, ctx_token, back_callback):
@@ -791,15 +791,15 @@ class QuizBot:
         row = []
         for preset in (10, 20, 50, 100):
             if preset < total:
-                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzsmf_cnt_{ctx_token}_{preset}"))
+                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzsmf_cnt_{ctx_token}_{preset}", style='primary'))
                 if len(row) == 3:
                     keyboard.append(row)
                     row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzsmf_cnt_{ctx_token}_{total}")])
-        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzsmf_cntcustom_{ctx_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=back_callback)])
+        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzsmf_cnt_{ctx_token}_{total}", style='primary')])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzsmf_cntcustom_{ctx_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=back_callback, style='primary')])
         return text, keyboard
     
     def build_subjmulti_full_timer_menu(self, ctx_token, count):
@@ -811,14 +811,14 @@ class QuizBot:
         keyboard = []
         row = []
         for secs, label in ((10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (45, "45 sec"), (60, "1 min")):
-            row.append(InlineKeyboardButton(label, callback_data=f"qzsmf_tmr_{ctx_token}_{count}_{secs}"))
+            row.append(InlineKeyboardButton(label, callback_data=f"qzsmf_tmr_{ctx_token}_{count}_{secs}", style='primary'))
             if len(row) == 3:
                 keyboard.append(row)
                 row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzsmf_tmrcustom_{ctx_token}_{count}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzsmf_backcnt_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzsmf_tmrcustom_{ctx_token}_{count}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzsmf_backcnt_{ctx_token}", style='primary')])
         return text, keyboard
     
     def build_subjmulti_count_menu(self, subjects, ctx_token):
@@ -833,15 +833,15 @@ class QuizBot:
         row = []
         for preset in (10, 20, 50, 100):
             if preset < total:
-                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzsc_cnt_{ctx_token}_{preset}"))
+                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzsc_cnt_{ctx_token}_{preset}", style='primary'))
                 if len(row) == 3:
                     keyboard.append(row)
                     row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzsc_cnt_{ctx_token}_{total}")])
-        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzsc_cntcustom_{ctx_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode")])
+        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzsc_cnt_{ctx_token}_{total}", style='primary')])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzsc_cntcustom_{ctx_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qzsm_mode", style='primary')])
         return text, keyboard
     
     def build_subjmulti_timer_menu(self, ctx_token, count):
@@ -852,14 +852,14 @@ class QuizBot:
         keyboard = []
         row = []
         for secs, label in ((10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (45, "45 sec"), (60, "1 min")):
-            row.append(InlineKeyboardButton(label, callback_data=f"qzst_tmr_{ctx_token}_{count}_{secs}"))
+            row.append(InlineKeyboardButton(label, callback_data=f"qzst_tmr_{ctx_token}_{count}_{secs}", style='primary'))
             if len(row) == 3:
                 keyboard.append(row)
                 row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzst_tmrcustom_{ctx_token}_{count}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzsc_backcnt_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzst_tmrcustom_{ctx_token}_{count}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzsc_backcnt_{ctx_token}", style='primary')])
         return text, keyboard
     
     def build_user_folder_menu(self, subject):
@@ -867,18 +867,18 @@ class QuizBot:
         folders = self.get_structure()['folders'].get(subject, {})
         if not folders:
             return (f"📁 {subject} Quizzes:\n\n😔 No quiz folders under this subject yet.\nPlease check back later!",
-                    [[InlineKeyboardButton("🔙 Back to Subjects", callback_data="qz_back_subjects")]])
+                    [[InlineKeyboardButton("🔙 Back to Subjects", callback_data="qz_back_subjects", style='primary')]])
         text = f"📁 {subject} Quizzes:"
         keyboard = []
         for name in sorted(folders.keys()):
             token = self.register_pair_token(subject, name)
-            keyboard.append([InlineKeyboardButton(f"📁 {name} ({folders[name]})", callback_data=f"qz_fold_{token}")])
+            keyboard.append([InlineKeyboardButton(f"📁 {name} ({folders[name]})", callback_data=f"qz_fold_{token}", style='primary')])
         # NEW: let the user pick more than one chapter/folder at once
         if folders:
             subject_token = self.register_subject_token(subject)
             keyboard.append([InlineKeyboardButton(
-                "☑️ Select Multiple Chapters", callback_data=f"qzm_mode_{subject_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qz_back_subjects")])
+                "☑️ Select Multiple Chapters", callback_data=f"qzm_mode_{subject_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qz_back_subjects", style='primary')])
         return text, keyboard
     
     def build_user_folder_multi_menu(self, subject, selected):
@@ -895,17 +895,17 @@ class QuizBot:
             checkbox = "☑️" if name in selected else "⬜"
             token = self.register_pair_token(subject, name)
             keyboard.append([InlineKeyboardButton(
-                f"{checkbox} {name} ({folders[name]})", callback_data=f"qzm_tgl_{token}")])
+                f"{checkbox} {name} ({folders[name]})", callback_data=f"qzm_tgl_{token}", style='primary')])
         control_row = [
-            InlineKeyboardButton("✅ Select All", callback_data=f"qzm_all_{subject_token}"),
-            InlineKeyboardButton("◻️ Clear All", callback_data=f"qzm_clr_{subject_token}")
+            InlineKeyboardButton("✅ Select All", callback_data=f"qzm_all_{subject_token}", style='primary'),
+            InlineKeyboardButton("◻️ Clear All", callback_data=f"qzm_clr_{subject_token}", style='primary')
         ]
         keyboard.append(control_row)
         if selected:
             keyboard.append([InlineKeyboardButton(
-                f"▶️ Start Quiz ({n} selected)", callback_data=f"qzm_start_{subject_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Single-Select Mode", callback_data="qz_back_folders")])
-        keyboard.append([InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")])
+                f"▶️ Start Quiz ({n} selected)", callback_data=f"qzm_start_{subject_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Single-Select Mode", callback_data="qz_back_folders", style='primary')])
+        keyboard.append([InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')])
         return text, keyboard
     
     def build_multi_quiz_count_menu(self, subject, folders, ctx_token):
@@ -920,16 +920,16 @@ class QuizBot:
         row = []
         for preset in (10, 20, 50, 100):
             if preset < total:
-                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzm_cnt_{ctx_token}_{preset}"))
+                row.append(InlineKeyboardButton(str(preset), callback_data=f"qzm_cnt_{ctx_token}_{preset}", style='primary'))
                 if len(row) == 3:
                     keyboard.append(row)
                     row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzm_cnt_{ctx_token}_{total}")])
-        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzm_cntcustom_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qzm_cnt_{ctx_token}_{total}", style='primary')])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qzm_cntcustom_{ctx_token}", style='primary')])
         subject_token = self.register_subject_token(subject)
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzm_mode_{subject_token}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzm_mode_{subject_token}", style='primary')])
         return text, keyboard
     
     def build_multi_quiz_timer_menu(self, ctx_token, count):
@@ -940,14 +940,14 @@ class QuizBot:
         keyboard = []
         row = []
         for secs, label in ((10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (45, "45 sec"), (60, "1 min")):
-            row.append(InlineKeyboardButton(label, callback_data=f"qzm_tmr_{ctx_token}_{count}_{secs}"))
+            row.append(InlineKeyboardButton(label, callback_data=f"qzm_tmr_{ctx_token}_{count}_{secs}", style='primary'))
             if len(row) == 3:
                 keyboard.append(row)
                 row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzm_tmrcustom_{ctx_token}_{count}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzm_backcnt_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qzm_tmrcustom_{ctx_token}_{count}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qzm_backcnt_{ctx_token}", style='primary')])
         return text, keyboard
     
     def build_user_subfolder_menu(self, subject, folder):
@@ -962,10 +962,10 @@ class QuizBot:
             cnt = self.mongo.count_documents(
                 'quizzes', {'subject': subject, 'folder': folder, 'subfolder': name, 'is_active': True})
             token = self.register_qz_ctx(subject, folder, name)
-            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"qz_subf_{token}")])
+            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"qz_subf_{token}", style='primary')])
         all_token = self.register_qz_ctx(subject, folder, '')
-        keyboard.append([InlineKeyboardButton(f"📄 All Questions in Folder ({total})", callback_data=f"qz_subf_{all_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qz_back_folders")])
+        keyboard.append([InlineKeyboardButton(f"📄 All Questions in Folder ({total})", callback_data=f"qz_subf_{all_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="qz_back_folders", style='primary')])
         return text, keyboard
     
     def build_user_folder_start(self, subject, folder, subfolder=''):
@@ -983,8 +983,8 @@ class QuizBot:
                 f"Questions will be sent in random order.\n"
                 f"Each question appears only once per session.")
         keyboard = [
-            [InlineKeyboardButton("▶️ Start Quiz", callback_data=f"qz_pickcount_{token}")],
-            [InlineKeyboardButton("🔙 Back", callback_data="qz_back_folders")]
+            [InlineKeyboardButton("▶️ Start Quiz", callback_data=f"qz_pickcount_{token}", style='primary')],
+            [InlineKeyboardButton("🔙 Back", callback_data="qz_back_folders", style='primary')]
         ]
         return text, keyboard
     
@@ -1002,15 +1002,15 @@ class QuizBot:
         row = []
         for preset in (10, 20, 50, 100):
             if preset < total:
-                row.append(InlineKeyboardButton(str(preset), callback_data=f"qz_cnt_{ctx_token}_{preset}"))
+                row.append(InlineKeyboardButton(str(preset), callback_data=f"qz_cnt_{ctx_token}_{preset}", style='primary'))
                 if len(row) == 3:
                     keyboard.append(row)
                     row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qz_cnt_{ctx_token}_{total}")])
-        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qz_cntcustom_{ctx_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qz_subf_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton(f"📚 All ({total})", callback_data=f"qz_cnt_{ctx_token}_{total}", style='primary')])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Number", callback_data=f"qz_cntcustom_{ctx_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qz_subf_{ctx_token}", style='primary')])
         return text, keyboard
     
     def build_quiz_timer_menu(self, ctx_token, count):
@@ -1021,14 +1021,14 @@ class QuizBot:
         keyboard = []
         row = []
         for secs, label in ((10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (45, "45 sec"), (60, "1 min")):
-            row.append(InlineKeyboardButton(label, callback_data=f"qz_tmr_{ctx_token}_{count}_{secs}"))
+            row.append(InlineKeyboardButton(label, callback_data=f"qz_tmr_{ctx_token}_{count}_{secs}", style='primary'))
             if len(row) == 3:
                 keyboard.append(row)
                 row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qz_tmrcustom_{ctx_token}_{count}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qz_pickcount_{ctx_token}")])
+        keyboard.append([InlineKeyboardButton("✏️ Custom Timer", callback_data=f"qz_tmrcustom_{ctx_token}_{count}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"qz_pickcount_{ctx_token}", style='primary')])
         return text, keyboard
     
     def build_admin_subject_menu(self):
@@ -1046,9 +1046,9 @@ class QuizBot:
         keyboard = []
         for name in sorted(subjects.keys()):
             token = self.register_subject_token(name)
-            keyboard.append([InlineKeyboardButton(f"📚 {name} ({subjects[name]})", callback_data=f"addquiz_subj_{token}")])
-        keyboard.append([InlineKeyboardButton("➕ Create New Subject", callback_data="addquiz_newsubj")])
-        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="start_menu")])
+            keyboard.append([InlineKeyboardButton(f"📚 {name} ({subjects[name]})", callback_data=f"addquiz_subj_{token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("➕ Create New Subject", callback_data="addquiz_newsubj", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="start_menu", style='primary')])
         return text, keyboard
     
     def build_admin_folder_menu(self, subject):
@@ -1060,9 +1060,9 @@ class QuizBot:
         keyboard = []
         for name in sorted(folders.keys()):
             token = self.register_pair_token(subject, name)
-            keyboard.append([InlineKeyboardButton(f"📁 {name} ({folders[name]})", callback_data=f"addquiz_fold_{token}")])
-        keyboard.append([InlineKeyboardButton("➕ Create New Quiz Folder", callback_data="addquiz_newfold")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="addquiz_backsubj")])
+            keyboard.append([InlineKeyboardButton(f"📁 {name} ({folders[name]})", callback_data=f"addquiz_fold_{token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("➕ Create New Quiz Folder", callback_data="addquiz_newfold", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="addquiz_backsubj", style='primary')])
         return text, keyboard
     
     def build_admin_subfolder_menu(self, subject, folder):
@@ -1076,11 +1076,11 @@ class QuizBot:
         for name in subfolders:
             cnt = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'subfolder': name})
             token = self.register_qz_ctx(subject, folder, name)
-            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"addquiz_subf_{token}")])
+            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"addquiz_subf_{token}", style='primary')])
         root_token = self.register_pair_token(subject, folder)
-        keyboard.append([InlineKeyboardButton("📄 Add Directly to This Folder", callback_data=f"addquiz_nosubf_{root_token}")])
-        keyboard.append([InlineKeyboardButton("➕ Create New Sub-folder", callback_data=f"addquiz_newsubf_{root_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="addquiz_backsubj")])
+        keyboard.append([InlineKeyboardButton("📄 Add Directly to This Folder", callback_data=f"addquiz_nosubf_{root_token}", style='success')])
+        keyboard.append([InlineKeyboardButton("➕ Create New Sub-folder", callback_data=f"addquiz_newsubf_{root_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="addquiz_backsubj", style='primary')])
         return text, keyboard
     
     def load_quizzes(self):
@@ -1331,15 +1331,15 @@ class QuizBot:
         if chat_type == 'private':
             if self.is_admin(user_id):
                 keyboard = [
-                    [InlineKeyboardButton("📊 View Statistics", callback_data="stats")],
-                    [InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz")],
-                    [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders")],
-                    [InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
-                    [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")],
-                    [InlineKeyboardButton("👥 Manage Groups", callback_data="manage_groups")],
-                    [InlineKeyboardButton("📋 Export Data", callback_data="export_data")],
-                    [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes")],
-                    [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports")]
+                    [InlineKeyboardButton("📊 View Statistics", callback_data="stats", style='primary')],
+                    [InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz", style='success')],
+                    [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders", style='primary')],
+                    [InlineKeyboardButton("⚙️ Settings", callback_data="settings", style='primary')],
+                    [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast", style='primary')],
+                    [InlineKeyboardButton("👥 Manage Groups", callback_data="manage_groups", style='primary')],
+                    [InlineKeyboardButton("📋 Export Data", callback_data="export_data", style='primary')],
+                    [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes", style='primary')],
+                    [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports", style='primary')]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
@@ -1367,12 +1367,12 @@ class QuizBot:
             else:
                 bot_username = context.bot.username
                 keyboard = [
-                    [InlineKeyboardButton("➕ Add me to your Group", url=f"https://t.me/{bot_username}?startgroup=true")],
-                    [InlineKeyboardButton("🎮 Play Quiz", callback_data="qz_back_subjects")]
+                    [InlineKeyboardButton("➕ Add me to your Group", url=f"https://t.me/{bot_username}?startgroup=true", style='success')],
+                    [InlineKeyboardButton("🎮 Play Quiz", callback_data="qz_back_subjects", style='primary')]
                 ]
                 if SUPPORT_USERNAME:
                     support_url = SUPPORT_USERNAME if SUPPORT_USERNAME.startswith('http') else f"https://t.me/{SUPPORT_USERNAME}"
-                    keyboard.append([InlineKeyboardButton("🆘 Support", url=support_url)])
+                    keyboard.append([InlineKeyboardButton("🆘 Support", url=support_url, style='primary')])
                 await update.message.reply_text(
                     "👋 *Welcome!*\n\n"
                     "I'm a Quiz Bot — I send fun quiz polls in groups and let you play quizzes right here in DM!\n\n"
@@ -1434,8 +1434,8 @@ class QuizBot:
         # Send welcome message with group controls for admin
         if self.is_admin(update.effective_user.id):
             keyboard = [
-                [InlineKeyboardButton("🚫 Remove from Group", callback_data=f"remove_group_{chat_id}")],
-                [InlineKeyboardButton("📊 Group Stats", callback_data=f"group_stats_{chat_id}")]
+                [InlineKeyboardButton("🚫 Remove from Group", callback_data=f"remove_group_{chat_id}", style='danger')],
+                [InlineKeyboardButton("📊 Group Stats", callback_data=f"group_stats_{chat_id}", style='primary')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(message, reply_markup=reply_markup)
@@ -1500,7 +1500,7 @@ class QuizBot:
                     "Subject → Quiz Folder\n\n"
                     "After that, every Quiz Mode poll you send will automatically "
                     "be saved under your selection.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz", style='success')]])
                 )
             return
         
@@ -2120,8 +2120,8 @@ class QuizBot:
             text = (f"😔 No quiz questions here yet. Please check back later!\n\n"
                     f"📚 Subject: {subject}\n📁 Quiz Folder: {label}")
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders")],
-                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+                [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders", style='primary')],
+                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
             ])
             if edit_query:
                 await edit_query.edit_message_text(text, reply_markup=keyboard)
@@ -2166,8 +2166,8 @@ class QuizBot:
             text = (f"😔 No quiz questions here yet. Please check back later!\n\n"
                     f"📚 Subject: {subject}\n📁 Chapters: {label}")
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders")],
-                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+                [InlineKeyboardButton("🔙 Back to Folders", callback_data="qz_back_folders", style='primary')],
+                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
             ])
             if edit_query:
                 await edit_query.edit_message_text(text, reply_markup=keyboard)
@@ -2213,7 +2213,7 @@ class QuizBot:
             text = (f"😔 No quiz questions here yet. Please check back later!\n\n"
                     f"📚 Subjects: {label}")
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+                [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
             ])
             if edit_query:
                 await edit_query.edit_message_text(text, reply_markup=keyboard)
@@ -2422,9 +2422,9 @@ class QuizBot:
         
         text = self.build_session_result(session, stopped=True)
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart")],
-            [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders")],
-            [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+            [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart", style='primary')],
+            [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders", style='primary')],
+            [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
         ])
         await update.message.reply_text(text, reply_markup=keyboard)
     
@@ -2563,9 +2563,9 @@ class QuizBot:
         self.save_stats()  # persist score counters
         text = self.build_session_result(session, stopped=False)
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart")],
-            [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders")],
-            [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects")]
+            [InlineKeyboardButton("🔄 Restart This Quiz", callback_data="qz_restart", style='primary')],
+            [InlineKeyboardButton("📁 Back to Folders", callback_data="qz_back_folders", style='primary')],
+            [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
         ])
         await context.bot.send_message(
             chat_id, text, reply_markup=keyboard)
@@ -2591,7 +2591,7 @@ class QuizBot:
             f"Finish with /done or the button below.\n\n"
             f"💡 Quiz Mode poll: 📎 → Poll → question & options → ✅ Quiz Mode → set correct answer → send"
         )
-        keyboard = [[InlineKeyboardButton("✅ Done Adding", callback_data="addquiz_done")]]
+        keyboard = [[InlineKeyboardButton("✅ Done Adding", callback_data="addquiz_done", style='primary')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if update.callback_query:
@@ -2618,9 +2618,9 @@ class QuizBot:
             f"You can start again anytime via 📝 Add Quiz."
         )
         keyboard = [
-            [InlineKeyboardButton("📝 Add More Quizzes", callback_data="add_quiz")],
-            [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders")],
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+            [InlineKeyboardButton("📝 Add More Quizzes", callback_data="add_quiz", style='success')],
+            [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders", style='primary')],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -2708,8 +2708,8 @@ class QuizBot:
             await update.message.reply_text(
                 f"✅ Subject Renamed\n\n📚 {old} → {name}\n📝 {modified} quiz question(s) updated",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders")],
-                    [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+                    [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders", style='primary')],
+                    [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]
                 ]))
         
         elif state == 'rename_folder':
@@ -2727,8 +2727,8 @@ class QuizBot:
             await update.message.reply_text(
                 f"✅ Quiz Folder Renamed\n\n📚 {subject}\n📁 {old} → {name}\n📝 {modified} quiz question(s) updated",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders")],
-                    [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+                    [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders", style='primary')],
+                    [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]
                 ]))
         
         else:
@@ -2757,9 +2757,9 @@ class QuizBot:
         if notice:
             text = notice + "\n\n" + text
         keyboard = [
-            [InlineKeyboardButton("📚 View Subjects", callback_data="mf_subjview")],
-            [InlineKeyboardButton("➕ Create Subject", callback_data="mf_newsubj")],
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+            [InlineKeyboardButton("📚 View Subjects", callback_data="mf_subjview", style='primary')],
+            [InlineKeyboardButton("➕ Create Subject", callback_data="mf_newsubj", style='primary')],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]
         ]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
@@ -2782,9 +2782,9 @@ class QuizBot:
             token = self.register_subject_token(name)
             keyboard.append([InlineKeyboardButton(
                 f"📚 {name} — {subjects[name]} quizzes, {folder_count} folders",
-                callback_data=f"mf_subj_{token}")])
-        keyboard.append([InlineKeyboardButton("➕ Create Subject", callback_data="mf_newsubj")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="mf_home")])
+                callback_data=f"mf_subj_{token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("➕ Create Subject", callback_data="mf_newsubj", style='primary')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="mf_home", style='primary')])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def show_manage_subject_detail(self, update: Update, context: ContextTypes.DEFAULT_TYPE, subject):
@@ -2808,11 +2808,11 @@ class QuizBot:
             token = self.register_pair_token(subject, folder_name)
             keyboard.append([InlineKeyboardButton(
                 f"📁 {folder_name} ({folders[folder_name]})",
-                callback_data=f"mf_fold_{token}")])
-        keyboard.append([InlineKeyboardButton("➕ Create Quiz Folder", callback_data="mf_newfold")])
-        keyboard.append([InlineKeyboardButton("✏️ Rename Subject", callback_data=f"mf_rensub_{subject_token}")])
-        keyboard.append([InlineKeyboardButton("🗑️ Delete Subject", callback_data=f"mf_delsub_{subject_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back to Subjects", callback_data="mf_subjview")])
+                callback_data=f"mf_fold_{token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("➕ Create Quiz Folder", callback_data="mf_newfold", style='primary')])
+        keyboard.append([InlineKeyboardButton("✏️ Rename Subject", callback_data=f"mf_rensub_{subject_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🗑️ Delete Subject", callback_data=f"mf_delsub_{subject_token}", style='danger')])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Subjects", callback_data="mf_subjview", style='primary')])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def show_manage_folder_detail(self, update: Update, context: ContextTypes.DEFAULT_TYPE, subject, folder):
@@ -2836,12 +2836,12 @@ class QuizBot:
         for name in subfolders:
             cnt = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder, 'subfolder': name})
             token = self.register_qz_ctx(subject, folder, name)
-            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"mf_subf_{token}")])
-        keyboard.append([InlineKeyboardButton("➕ Create Sub-folder", callback_data=f"mf_newsubf_{pair_token}")])
-        keyboard.append([InlineKeyboardButton("➕ Add Quizzes Here", callback_data=f"mf_addhere_{pair_token}")])
-        keyboard.append([InlineKeyboardButton("✏️ Rename Quiz Folder", callback_data=f"mf_renfold_{pair_token}")])
-        keyboard.append([InlineKeyboardButton("🗑️ Delete Quiz Folder", callback_data=f"mf_delfold_{pair_token}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"mf_subj_{subject_token}")])
+            keyboard.append([InlineKeyboardButton(f"📂 {name} ({cnt})", callback_data=f"mf_subf_{token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("➕ Create Sub-folder", callback_data=f"mf_newsubf_{pair_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("➕ Add Quizzes Here", callback_data=f"mf_addhere_{pair_token}", style='success')])
+        keyboard.append([InlineKeyboardButton("✏️ Rename Quiz Folder", callback_data=f"mf_renfold_{pair_token}", style='primary')])
+        keyboard.append([InlineKeyboardButton("🗑️ Delete Quiz Folder", callback_data=f"mf_delfold_{pair_token}", style='danger')])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"mf_subj_{subject_token}", style='primary')])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def show_manage_subfolder_detail(self, update: Update, context: ContextTypes.DEFAULT_TYPE, subject, folder, subfolder):
@@ -2859,9 +2859,9 @@ class QuizBot:
             f"📝 Questions inside: {count}"
         )
         keyboard = [
-            [InlineKeyboardButton("➕ Add Quizzes Here", callback_data=f"mf_addheresubf_{ctx_token}")],
-            [InlineKeyboardButton("🗑️ Delete Sub-folder", callback_data=f"mf_delsubf_{ctx_token}")],
-            [InlineKeyboardButton("🔙 Back", callback_data=f"mf_fold_{pair_token}")]
+            [InlineKeyboardButton("➕ Add Quizzes Here", callback_data=f"mf_addheresubf_{ctx_token}", style='success')],
+            [InlineKeyboardButton("🗑️ Delete Sub-folder", callback_data=f"mf_delsubf_{ctx_token}", style='danger')],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"mf_fold_{pair_token}", style='primary')]
         ]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
@@ -3052,23 +3052,23 @@ class QuizBot:
         if report.get('status') == 'pending':
             keyboard = [
                 [
-                    InlineKeyboardButton("✏️ Edit / Replace Quiz", callback_data=f"edit_quiz_{report['_id']}")
+                    InlineKeyboardButton("✏️ Edit / Replace Quiz", callback_data=f"edit_quiz_{report['_id']}", style='primary')
                 ],
                 [
-                    InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report['_id']}"),
-                    InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report['_id']}")
+                    InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report['_id']}", style='danger'),
+                    InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report['_id']}", style='primary')
                 ],
                 [
-                    InlineKeyboardButton("📝 View Similar Quizzes", callback_data=f"view_similar_{report['_id']}"),
-                    InlineKeyboardButton("📊 View All Reports", callback_data="view_reports")
+                    InlineKeyboardButton("📝 View Similar Quizzes", callback_data=f"view_similar_{report['_id']}", style='primary'),
+                    InlineKeyboardButton("📊 View All Reports", callback_data="view_reports", style='primary')
                 ],
-                [InlineKeyboardButton("🔙 Back to Reports", callback_data="view_reports")]
+                [InlineKeyboardButton("🔙 Back to Reports", callback_data="view_reports", style='primary')]
             ]
         else:
             keyboard = [
                 [
-                    InlineKeyboardButton("📊 View All Reports", callback_data="view_reports"),
-                    InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")
+                    InlineKeyboardButton("📊 View All Reports", callback_data="view_reports", style='primary'),
+                    InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')
                 ]
             ]
         
@@ -3118,17 +3118,17 @@ class QuizBot:
         # Create action buttons
         keyboard = [
             [
-                InlineKeyboardButton("✏️ Edit / Replace Quiz", callback_data=f"edit_quiz_{report_id}")
+                InlineKeyboardButton("✏️ Edit / Replace Quiz", callback_data=f"edit_quiz_{report_id}", style='primary')
             ],
             [
-                InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report_id}"),
-                InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report_id}")
+                InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report_id}", style='danger'),
+                InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report_id}", style='primary')
             ],
             [
-                InlineKeyboardButton("📝 View Similar Quizzes", callback_data=f"view_similar_{report_id}"),
-                InlineKeyboardButton("📊 View All Reports", callback_data="view_reports")
+                InlineKeyboardButton("📝 View Similar Quizzes", callback_data=f"view_similar_{report_id}", style='primary'),
+                InlineKeyboardButton("📊 View All Reports", callback_data="view_reports", style='primary')
             ],
-            [InlineKeyboardButton("🔙 Back to Menu", callback_data="start_menu")]
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="start_menu", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -3226,11 +3226,11 @@ class QuizBot:
             
             # Add option to delete all similar
             keyboard = [
-                [InlineKeyboardButton("🗑️ Delete All Similar", callback_data=f"delete_similar_{report_id}")],
-                [InlineKeyboardButton("✅ Done", callback_data="close_report")]
+                [InlineKeyboardButton("🗑️ Delete All Similar", callback_data=f"delete_similar_{report_id}", style='danger')],
+                [InlineKeyboardButton("✅ Done", callback_data="close_report", style='primary')]
             ]
         else:
-            keyboard = [[InlineKeyboardButton("✅ Done", callback_data="close_report")]]
+            keyboard = [[InlineKeyboardButton("✅ Done", callback_data="close_report", style='primary')]]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -3281,7 +3281,7 @@ class QuizBot:
             f"The quiz database has been cleaned."
         )
         
-        keyboard = [[InlineKeyboardButton("✅ Done", callback_data="close_report")]]
+        keyboard = [[InlineKeyboardButton("✅ Done", callback_data="close_report", style='primary')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(response_text, reply_markup=reply_markup)
@@ -3304,7 +3304,7 @@ class QuizBot:
             "✅ *Report Ignored*\n\n"
             "The quiz report has been marked as ignored.\n"
             "No action was taken on the quiz.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Close", callback_data="close_report")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Close", callback_data="close_report", style='primary')]])
         ,
             parse_mode='Markdown'
         )
@@ -3337,8 +3337,8 @@ class QuizBot:
             )
             
             keyboard = [
-                [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")],
-                [InlineKeyboardButton("✅ Close", callback_data="close_report")]
+                [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}", style='primary')],
+                [InlineKeyboardButton("✅ Close", callback_data="close_report", style='primary')]
             ]
         else:
             response_text = f"📝 *Found {len(similar_quizzes)} Similar Quiz(es)*\n\n"
@@ -3361,12 +3361,12 @@ class QuizBot:
             
             keyboard = [
                 [
-                    InlineKeyboardButton("🗑️ Delete All", callback_data=f"delete_similar_{report_id}"),
-                    InlineKeyboardButton("🗑️ Delete Only Exact", callback_data=f"delete_quiz_{report_id}")
+                    InlineKeyboardButton("🗑️ Delete All", callback_data=f"delete_similar_{report_id}", style='danger'),
+                    InlineKeyboardButton("🗑️ Delete Only Exact", callback_data=f"delete_quiz_{report_id}", style='danger')
                 ],
                 [
-                    InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}"),
-                    InlineKeyboardButton("✅ Close", callback_data="close_report")
+                    InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}", style='primary'),
+                    InlineKeyboardButton("✅ Close", callback_data="close_report", style='primary')
                 ]
             ]
         
@@ -3401,7 +3401,7 @@ class QuizBot:
                 "❌ Couldn't locate the original quiz in the database.\n"
                 "It may have already been deleted or edited.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")]
+                    [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}", style='primary')]
                 ]))
             return
         
@@ -3416,10 +3416,10 @@ class QuizBot:
             token = self.register_edit_ctx(str(quiz['_id']), report_id)
             folder_bit = f" → {quiz.get('folder')}" if quiz.get('folder') else ""
             label = f"{i}. {quiz.get('subject', '?')}{folder_bit}"
-            keyboard.append([InlineKeyboardButton(label, callback_data=f"editq_pick_{token}")])
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"editq_pick_{token}", style='primary')])
         if len(candidates) > 10:
             text += f"(Showing first 10 of {len(candidates)})\n\n"
-        keyboard.append([InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}", style='primary')])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def show_edit_quiz_options(self, query, quiz, report_id):
@@ -3439,9 +3439,9 @@ class QuizBot:
             f"Choose what you want to change:"
         )
         keyboard = [
-            [InlineKeyboardButton("📝 Edit Question Text Only", callback_data=f"editq_text_{token}")],
-            [InlineKeyboardButton("🔁 Replace Entire Quiz (send new poll)", callback_data=f"editq_poll_{token}")],
-            [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")]
+            [InlineKeyboardButton("📝 Edit Question Text Only", callback_data=f"editq_text_{token}", style='primary')],
+            [InlineKeyboardButton("🔁 Replace Entire Quiz (send new poll)", callback_data=f"editq_poll_{token}", style='primary')],
+            [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}", style='primary')]
         ]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     
@@ -3533,7 +3533,7 @@ class QuizBot:
             f"✅ <b>Question Updated!</b>\n\n"
             f"📝 New question: {html_lib.escape(new_question)}\n\n"
             f"The quiz has been updated in place — everything else is unchanged.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report", style='primary')]]),
             parse_mode='HTML'
         )
     
@@ -3586,7 +3586,7 @@ class QuizBot:
             f"📝 New Question: {html_lib.escape(poll.question)}\n"
             f"✅ New Correct Answer: {html_lib.escape(correct_answer)}\n\n"
             f"The old question/options/answer have been replaced in place.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report", style='primary')]]),
             parse_mode='HTML'
         )
     
@@ -3609,7 +3609,7 @@ class QuizBot:
                 f"• Resolved: {len([r for r in total_reports if r['status'] != 'pending'])}\n"
             )
             
-            keyboard = [[InlineKeyboardButton("✅ Close", callback_data="close_report")]]
+            keyboard = [[InlineKeyboardButton("✅ Close", callback_data="close_report", style='primary')]]
         else:
             response_text = (
                 f"📊 *Quiz Reports Dashboard*\n\n"
@@ -3632,7 +3632,7 @@ class QuizBot:
                 )
                 
                 # Add a button for each report
-                keyboard.append([InlineKeyboardButton(f"📋 Review #{i}", callback_data=f"report_back_{report['_id']}")])
+                keyboard.append([InlineKeyboardButton(f"📋 Review #{i}", callback_data=f"report_back_{report['_id']}", style='primary')])
             
             if len(pending_reports) > 5:
                 response_text += f"... and {len(pending_reports) - 5} more pending reports\n\n"
@@ -3644,10 +3644,10 @@ class QuizBot:
             response_text += f"💡 Use `/view <report_id>` to view a specific report"
             
             # Add control buttons
-            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="view_reports")])
-            keyboard.append([InlineKeyboardButton("🗑️ Clear All Resolved", callback_data="clear_resolved_reports")])
-            keyboard.append([InlineKeyboardButton("📊 Statistics", callback_data="stats")])
-            keyboard.append([InlineKeyboardButton("✅ Close", callback_data="close_report")])
+            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="view_reports", style='primary')])
+            keyboard.append([InlineKeyboardButton("🗑️ Clear All Resolved", callback_data="clear_resolved_reports", style='primary')])
+            keyboard.append([InlineKeyboardButton("📊 Statistics", callback_data="stats", style='primary')])
+            keyboard.append([InlineKeyboardButton("✅ Close", callback_data="close_report", style='primary')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -3666,7 +3666,7 @@ class QuizBot:
             f"✅ *Resolved Reports Cleared*\n\n"
             f"🗑️ Deleted {deleted_count} resolved reports.\n"
             f"Only pending reports remain in the database.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 View Reports", callback_data="view_reports")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 View Reports", callback_data="view_reports", style='primary')]])
         ,
             parse_mode='Markdown'
         )
@@ -3693,7 +3693,7 @@ class QuizBot:
         await query.edit_message_text(
             "✅ Report interface closed.\n"
             "Use /start to access the main menu.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]])
         )
     
     async def handle_start_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3750,8 +3750,8 @@ class QuizBot:
             return
         
         keyboard = [
-            [InlineKeyboardButton("✅ Confirm Reset", callback_data="confirm_reset")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="settings")]
+            [InlineKeyboardButton("✅ Confirm Reset", callback_data="confirm_reset", style='success')],
+            [InlineKeyboardButton("❌ Cancel", callback_data="settings", style='danger')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -3792,7 +3792,7 @@ class QuizBot:
             f"🗑️ Deleted {deleted_count} quizzes\n"
             f"📝 Quiz database is now empty\n\n"
             f"Use the menu below to add new quizzes!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz", style='success')]])
         ,
             parse_mode='Markdown'
         )
@@ -3940,12 +3940,12 @@ class QuizBot:
         )
         
         keyboard = [
-            [InlineKeyboardButton("⚙️ Settings", callback_data="settings")],
-            [InlineKeyboardButton("📋 Export Data", callback_data="export_data")],
-            [InlineKeyboardButton("🔄 Refresh", callback_data="stats")],
-            [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")],
-            [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes")],
-            [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports")]
+            [InlineKeyboardButton("⚙️ Settings", callback_data="settings", style='primary')],
+            [InlineKeyboardButton("📋 Export Data", callback_data="export_data", style='primary')],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="stats", style='primary')],
+            [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast", style='primary')],
+            [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes", style='primary')],
+            [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -3986,14 +3986,14 @@ class QuizBot:
         )
         
         keyboard = [
-            [InlineKeyboardButton("🕐 Set Quiz Interval", callback_data="set_interval")],
-            [InlineKeyboardButton("📝 Set Explanation", callback_data="set_explanation")],
-            [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive")],
-            [InlineKeyboardButton("🔄 Refresh Groups", callback_data="refresh_groups")],
-            [InlineKeyboardButton("📊 Statistics", callback_data="stats")],
-            [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders")],
-            [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports")],
-            [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes")]
+            [InlineKeyboardButton("🕐 Set Quiz Interval", callback_data="set_interval", style='primary')],
+            [InlineKeyboardButton("📝 Set Explanation", callback_data="set_explanation", style='primary')],
+            [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive", style='primary')],
+            [InlineKeyboardButton("🔄 Refresh Groups", callback_data="refresh_groups", style='primary')],
+            [InlineKeyboardButton("📊 Statistics", callback_data="stats", style='primary')],
+            [InlineKeyboardButton("🗂 Manage Quiz Folders", callback_data="manage_folders", style='primary')],
+            [InlineKeyboardButton("⚠️ View Reports", callback_data="view_reports", style='primary')],
+            [InlineKeyboardButton("🔄 Reset Quizzes", callback_data="reset_quizzes", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -4162,7 +4162,7 @@ class QuizBot:
         
         self.broadcast_mode[user_id] = True
         
-        keyboard = [[InlineKeyboardButton("❌ Cancel Broadcast", callback_data="cancel_broadcast")]]
+        keyboard = [[InlineKeyboardButton("❌ Cancel Broadcast", callback_data="cancel_broadcast", style='danger')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         active_groups = len([g for g in self.groups if g.get('is_active', True)])
@@ -4362,10 +4362,10 @@ class QuizBot:
                 groups_text += f"{i}. {self.md_escape(group['title'])} - {group.get('quizzes_received', 0)} auto + {group.get('manual_quizzes_received', 0)} manual quizzes\n"
         
         keyboard = [
-            [InlineKeyboardButton("🔄 Refresh", callback_data="manage_groups")],
-            [InlineKeyboardButton("📊 Statistics", callback_data="stats")],
-            [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive")],
-            [InlineKeyboardButton("🔄 Reactivate All", callback_data="reactivate_all")]
+            [InlineKeyboardButton("🔄 Refresh", callback_data="manage_groups", style='primary')],
+            [InlineKeyboardButton("📊 Statistics", callback_data="stats", style='primary')],
+            [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive", style='primary')],
+            [InlineKeyboardButton("🔄 Reactivate All", callback_data="reactivate_all", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -4571,9 +4571,9 @@ class QuizBot:
         
         # Create inline keyboard for navigation
         keyboard = [
-            [InlineKeyboardButton("🔄 Refresh List", callback_data="refresh_groups")],
-            [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive")],
-            [InlineKeyboardButton("📊 All Group Stats", callback_data="manage_groups")]
+            [InlineKeyboardButton("🔄 Refresh List", callback_data="refresh_groups", style='primary')],
+            [InlineKeyboardButton("🗑️ Clean Inactive", callback_data="clean_inactive", style='primary')],
+            [InlineKeyboardButton("📊 All Group Stats", callback_data="manage_groups", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -4647,9 +4647,9 @@ class QuizBot:
         )
         
         keyboard = [
-            [InlineKeyboardButton("🔗 Get Links", callback_data="get_group_links")],
-            [InlineKeyboardButton("🔄 Refresh", callback_data="manage_groups")],
-            [InlineKeyboardButton("📊 Full Stats", callback_data="stats")]
+            [InlineKeyboardButton("🔗 Get Links", callback_data="get_group_links", style='primary')],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="manage_groups", style='primary')],
+            [InlineKeyboardButton("📊 Full Stats", callback_data="stats", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -4957,7 +4957,7 @@ class QuizBot:
             if not subject:
                 await query.edit_message_text(
                     "❌ Please open a subject first, then create a quiz folder inside it.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📚 View Subjects", callback_data="mf_subjview")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📚 View Subjects", callback_data="mf_subjview", style='primary')]])
                 )
             else:
                 context.user_data['await'] = 'new_folder'
@@ -5022,8 +5022,8 @@ class QuizBot:
                     f"Deleting this subject will PERMANENTLY DELETE {count} quiz question(s).\n"
                     f"This cannot be undone!",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton(f"🗑️ Confirm Delete ({count} quizzes)", callback_data=f"mf_cdelsub_{token}")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data=f"mf_subj_{token}")]
+                        [InlineKeyboardButton(f"🗑️ Confirm Delete ({count} quizzes)", callback_data=f"mf_cdelsub_{token}", style='danger')],
+                        [InlineKeyboardButton("❌ Cancel", callback_data=f"mf_subj_{token}", style='danger')]
                     ])
                 )
         elif data.startswith("mf_cdelsub_"):
@@ -5040,8 +5040,8 @@ class QuizBot:
                     f"📚 {subject}\n"
                     f"🗑️ {deleted} quiz question(s) removed permanently.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📚 View Subjects", callback_data="mf_subjview")],
-                        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+                        [InlineKeyboardButton("📚 View Subjects", callback_data="mf_subjview", style='primary')],
+                        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]
                     ])
                 )
         elif data.startswith("mf_delfold_"):
@@ -5060,8 +5060,8 @@ class QuizBot:
                     f"Deleting this folder will PERMANENTLY DELETE {count} quiz question(s).\n"
                     f"This cannot be undone!",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton(f"🗑️ Confirm Delete ({count} quizzes)", callback_data=f"mf_cdelfold_{token}")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data=f"mf_subj_{self.register_subject_token(subject)}")]
+                        [InlineKeyboardButton(f"🗑️ Confirm Delete ({count} quizzes)", callback_data=f"mf_cdelfold_{token}", style='danger')],
+                        [InlineKeyboardButton("❌ Cancel", callback_data=f"mf_subj_{self.register_subject_token(subject)}", style='danger')]
                     ])
                 )
         elif data.startswith("mf_cdelfold_"):
@@ -5079,8 +5079,8 @@ class QuizBot:
                     f"📚 {subject} → 📁 {folder}\n"
                     f"🗑️ {deleted} quiz question(s) removed permanently.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📚 Back to Subject", callback_data=f"mf_subj_{self.register_subject_token(subject)}")],
-                        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+                        [InlineKeyboardButton("📚 Back to Subject", callback_data=f"mf_subj_{self.register_subject_token(subject)}", style='primary')],
+                        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]
                     ])
                 )
         elif data.startswith("mf_addhere_"):
@@ -5139,8 +5139,8 @@ class QuizBot:
                     f"📂 {subfolder}\n"
                     f"🗑️ {deleted} quiz question(s) removed permanently.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📁 Back to Folder", callback_data=f"mf_fold_{pair_token}")],
-                        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu")]
+                        [InlineKeyboardButton("📁 Back to Folder", callback_data=f"mf_fold_{pair_token}", style='primary')],
+                        [InlineKeyboardButton("🏠 Main Menu", callback_data="start_menu", style='primary')]
                     ])
                 )
         elif data.startswith("mf_delsubf_"):
@@ -5158,8 +5158,8 @@ class QuizBot:
                     f"Deleting this sub-folder will PERMANENTLY DELETE {count} quiz question(s).\n"
                     f"This cannot be undone!",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton(f"🗑️ Confirm Delete ({count} quizzes)", callback_data=f"mf_cdelsubf_{token}")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data=f"mf_subf_{token}")]
+                        [InlineKeyboardButton(f"🗑️ Confirm Delete ({count} quizzes)", callback_data=f"mf_cdelsubf_{token}", style='danger')],
+                        [InlineKeyboardButton("❌ Cancel", callback_data=f"mf_subf_{token}", style='danger')]
                     ])
                 )
         # ==========================================================
@@ -5747,8 +5747,8 @@ class QuizBot:
         )
         
         keyboard = [
-            [InlineKeyboardButton("🚫 Remove Group", callback_data=f"remove_group_{chat_id}")],
-            [InlineKeyboardButton("👥 All Groups", callback_data="manage_groups")]
+            [InlineKeyboardButton("🚫 Remove Group", callback_data=f"remove_group_{chat_id}", style='danger')],
+            [InlineKeyboardButton("👥 All Groups", callback_data="manage_groups", style='primary')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
