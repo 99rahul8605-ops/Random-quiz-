@@ -3888,9 +3888,9 @@ class QuizBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if update.callback_query:
-            await update.callback_query.edit_message_text(stats_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(stats_text, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text(stats_text, reply_markup=reply_markup)
+            await update.message.reply_text(stats_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def show_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show bot settings"""
@@ -4308,9 +4308,9 @@ class QuizBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if update.callback_query:
-            await update.callback_query.edit_message_text(groups_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(groups_text, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text(groups_text, reply_markup=reply_markup)
+            await update.message.reply_text(groups_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def clean_inactive_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Remove inactive groups"""
@@ -5674,7 +5674,7 @@ class QuizBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.callback_query.edit_message_text(stats_text, reply_markup=reply_markup)
+        await update.callback_query.edit_message_text(stats_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle errors in the bot"""
