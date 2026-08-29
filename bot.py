@@ -6,6 +6,8 @@ import csv
 import threading
 import re
 import hashlib
+import requests
+import html as html_lib
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from flask import Flask
@@ -25,6 +27,54 @@ PORT = int(os.getenv('PORT', 10000))
 MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/quizbot')
 # NEW: shown as the "🆘 Support" button on /start — set this to your support @username (no @) or a t.me link
 SUPPORT_USERNAME = os.getenv('SUPPORT_USERNAME', '').lstrip('@').strip()
+
+# NEW: Reset & set the Telegram "/" command menu — a short, clean list for everyone,
+# and the full admin list scoped to just the admin's own private chat.
+def reset_and_set_commands():
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
+
+    # Reset old commands (both the default/public scope and the admin's private scope)
+    requests.post(url, json={"commands": []})
+    requests.post(url, json={
+        "commands": [],
+        "scope": {"type": "chat", "chat_id": ADMIN_USER_ID}
+    })
+
+    # New premium-style commands — shown to every user (default scope: all private chats)
+    commands = [
+        {"command": "start", "description": "🚀 Launch the bot"},
+        {"command": "quiz", "description": "🎮 Browse & play a quiz"},
+        {"command": "stop", "description": "🛑 Stop your running quiz"},
+        {"command": "qreport", "description": "⚠️ Report a wrong quiz"},
+    ]
+    requests.post(url, json={"commands": commands})
+
+    # Full admin command list — only visible inside the admin's own private chat
+    admin_commands = [
+        {"command": "start", "description": "👋 Open Admin Dashboard"},
+        {"command": "quiz", "description": "🎮 Browse & play a quiz"},
+        {"command": "stop", "description": "🛑 Stop your running quiz"},
+        {"command": "stats", "description": "📊 View bot statistics"},
+        {"command": "settings", "description": "⚙️ Configure bot settings"},
+        {"command": "broadcast", "description": "📢 Broadcast to all groups"},
+        {"command": "groups", "description": "👥 Manage groups"},
+        {"command": "grouplist", "description": "📋 List groups with invite links"},
+        {"command": "grouplinks", "description": "🔗 Export group links"},
+        {"command": "export", "description": "📦 Export quizzes & stats"},
+        {"command": "reset", "description": "🔄 Reset all saved quizzes"},
+        {"command": "setdelay", "description": "🕐 Set quiz broadcast interval"},
+        {"command": "setexplanation", "description": "📝 Set quiz explanation text"},
+        {"command": "rquiz", "description": "⚡ Send an immediate random quiz"},
+        {"command": "qreport", "description": "⚠️ Report a wrong quiz"},
+        {"command": "view", "description": "🔍 View a specific report"},
+        {"command": "addsudo", "description": "➕ Add a sudo admin"},
+        {"command": "remsudo", "description": "➖ Remove a sudo admin"},
+        {"command": "done", "description": "✅ Finish adding quizzes"},
+    ]
+    requests.post(url, json={
+        "commands": admin_commands,
+        "scope": {"type": "chat", "chat_id": ADMIN_USER_ID}
+    })
 
 # Global bot instance
 bot_instance = None
@@ -2678,11 +2728,12 @@ class QuizBot:
         # keep the confirmation visible in DM so it doesn't feel like it vanished)
         try:
             confirmation_msg = await update.message.reply_text(
-                f"✅ *Quiz Reported Successfully!*\n\n"
-                f"📝 *Question:* {replied_poll.question[:100]}...\n\n"
+                f"✅ <b>Quiz Reported Successfully!</b>\n\n"
+                f"📝 <b>Question:</b> {html_lib.escape(replied_poll.question[:100])}...\n\n"
                 f"The quiz has been forwarded to the admin for review.\n"
                 f"Thank you for helping improve the quiz quality!" +
-                ("\n\n⏰ _This confirmation will self-destruct in 10 seconds..._" if not is_private else "")
+                ("\n\n⏰ <i>This confirmation will self-destruct in 10 seconds...</i>" if not is_private else ""),
+                parse_mode='HTML'
             )
             
             if not is_private:
@@ -2735,8 +2786,9 @@ class QuizBot:
         
         if not report:
             await update.message.reply_text(
-                f"❌ Report not found: `{report_id}`\n\n"
-                f"Make sure you entered the correct report ID."
+                f"❌ Report not found: <code>{html_lib.escape(report_id)}</code>\n\n"
+                f"Make sure you entered the correct report ID.",
+                parse_mode='HTML'
             )
             return
         
@@ -2745,13 +2797,13 @@ class QuizBot:
     
     async def display_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report):
         """Display a report with action buttons"""
-        # Format quiz information
-        options_text = "\n".join([f"• {option}" for option in report['options']])
-        correct_answer = report['options'][report['correct_option_id']]
+        # Format quiz information (HTML-escaped — quiz text can contain < > & etc.)
+        options_text = "\n".join([f"• {html_lib.escape(option)}" for option in report['options']])
+        correct_answer = html_lib.escape(report['options'][report['correct_option_id']])
         
         # Handle username display
         username = report['reported_by']['username']
-        username_display = f" (@{username})" if username else ""
+        username_display = f" (@{html_lib.escape(username)})" if username else ""
         
         # Format status
         status_emoji = "🟡" if report.get('status') == 'pending' else "🟢" if report.get('status') == 'ignored' else "🔴"
@@ -2766,12 +2818,12 @@ class QuizBot:
                      if report.get('original_message_link') else "")
         report_text = (
             f"📋 <b>Report Details</b>\n\n"
-            f"📝 <b>Question:</b> {report['question']}\n\n"
+            f"📝 <b>Question:</b> {html_lib.escape(report['question'])}\n\n"
             f"📋 <b>Options:</b>\n{options_text}\n\n"
             f"✅ <b>Correct Answer:</b> {correct_answer}\n\n"
             f"📊 <b>Report Information:</b>\n"
-            f"• 👤 Reported by: {report['reported_by']['first_name']}{username_display}\n"
-            f"• 👥 Group: {report['group_name']}\n"
+            f"• 👤 Reported by: {html_lib.escape(report['reported_by']['first_name'])}{username_display}\n"
+            f"• 👥 Group: {html_lib.escape(report['group_name'])}\n"
             f"• 🕐 Time: {datetime.fromisoformat(report['report_time']).strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"• 📊 Status: {status_emoji} {status_text}\n"
             f"{link_line}"
@@ -2781,7 +2833,7 @@ class QuizBot:
         # Add action taken info if available
         if report.get('action_taken'):
             action_time = datetime.fromisoformat(report.get('action_time', report['report_time'])).strftime('%Y-%m-%d %H:%M:%S')
-            report_text += f"⚡ <b>Action Taken:</b> {report.get('action_taken', 'None')} at {action_time}\n\n"
+            report_text += f"⚡ <b>Action Taken:</b> {html_lib.escape(report.get('action_taken', 'None'))} at {action_time}\n\n"
         
         report_text += "<b>What would you like to do with this quiz?</b>"
         
@@ -2827,25 +2879,25 @@ class QuizBot:
     async def send_quiz_report_to_admin(self, context: ContextTypes.DEFAULT_TYPE, quiz_info: dict, report_id: str):
         """Send quiz report to admin with action buttons"""
         
-        # Format quiz information
-        options_text = "\n".join([f"• {option}" for option in quiz_info['options']])
-        correct_answer = quiz_info['options'][quiz_info['correct_option_id']]
+        # Format quiz information (HTML-escaped — quiz text can contain < > & etc.)
+        options_text = "\n".join([f"• {html_lib.escape(option)}" for option in quiz_info['options']])
+        correct_answer = html_lib.escape(quiz_info['options'][quiz_info['correct_option_id']])
         
         # Handle username display
         username = quiz_info['reported_by']['username']
-        username_display = f" (@{username})" if username else ""
+        username_display = f" (@{html_lib.escape(username)})" if username else ""
         
         # Use HTML formatting instead of Markdown to avoid parsing errors
         link_line = (f"• 🔗 Message: <a href='{quiz_info['original_message_link']}'>View Original</a>\n"
                      if quiz_info.get('original_message_link') else "")
         report_text = (
             f"⚠️ <b>QUIZ REPORTED FOR REVIEW</b>\n\n"
-            f"📝 <b>Question:</b> {quiz_info['question']}\n\n"
+            f"📝 <b>Question:</b> {html_lib.escape(quiz_info['question'])}\n\n"
             f"📋 <b>Options:</b>\n{options_text}\n\n"
             f"✅ <b>Correct Answer:</b> {correct_answer}\n\n"
             f"📊 <b>Report Details:</b>\n"
-            f"• 👤 Reported by: {quiz_info['reported_by']['first_name']}{username_display}\n"
-            f"• 👥 Group: {quiz_info['group_name']}\n"
+            f"• 👤 Reported by: {html_lib.escape(quiz_info['reported_by']['first_name'])}{username_display}\n"
+            f"• 👥 Group: {html_lib.escape(quiz_info['group_name'])}\n"
             f"• 🕐 Time: {datetime.fromisoformat(quiz_info['report_time']).strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"{link_line}"
             f"• 🆔 Report ID: <code>{report_id}</code>\n\n"
@@ -3162,15 +3214,15 @@ class QuizBot:
     async def show_edit_quiz_options(self, query, quiz, report_id):
         """NEW: Show the actual edit choices for one specific quiz doc."""
         token = self.register_edit_ctx(str(quiz['_id']), report_id)
-        options_text = "\n".join([f"• {o}" for o in quiz['options']])
-        correct = quiz['options'][quiz['correct_option_id']]
-        location = f"📚 {quiz.get('subject', '?')} → 📁 {quiz.get('folder', '?')}"
+        options_text = "\n".join([f"• {html_lib.escape(o)}" for o in quiz['options']])
+        correct = html_lib.escape(quiz['options'][quiz['correct_option_id']])
+        location = f"📚 {html_lib.escape(quiz.get('subject', '?'))} → 📁 {html_lib.escape(quiz.get('folder', '?'))}"
         if quiz.get('subfolder'):
-            location += f" → 📂 {quiz['subfolder']}"
+            location += f" → 📂 {html_lib.escape(quiz['subfolder'])}"
         text = (
             f"✏️ <b>Edit Quiz</b>\n\n"
             f"{location}\n\n"
-            f"📝 <b>Question:</b> {quiz['question']}\n\n"
+            f"📝 <b>Question:</b> {html_lib.escape(quiz['question'])}\n\n"
             f"📋 <b>Options:</b>\n{options_text}\n\n"
             f"✅ <b>Correct:</b> {correct}\n\n"
             f"Choose what you want to change:"
@@ -3267,10 +3319,11 @@ class QuizBot:
             }})
         
         await update.message.reply_text(
-            f"✅ *Question Updated!*\n\n"
-            f"📝 New question: {new_question}\n\n"
+            f"✅ <b>Question Updated!</b>\n\n"
+            f"📝 New question: {html_lib.escape(new_question)}\n\n"
             f"The quiz has been updated in place — everything else is unchanged.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]]),
+            parse_mode='HTML'
         )
     
     async def handle_edit_quiz_replace_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE, poll):
@@ -3313,16 +3366,17 @@ class QuizBot:
             }})
         
         correct_answer = poll.options[poll.correct_option_id].text
-        location = f"📚 {quiz.get('subject', '?')} → 📁 {quiz.get('folder', '?')}"
+        location = f"📚 {html_lib.escape(quiz.get('subject', '?'))} → 📁 {html_lib.escape(quiz.get('folder', '?'))}"
         if quiz.get('subfolder'):
-            location += f" → 📂 {quiz['subfolder']}"
+            location += f" → 📂 {html_lib.escape(quiz['subfolder'])}"
         await update.message.reply_text(
-            f"✅ *Quiz Replaced!*\n\n"
+            f"✅ <b>Quiz Replaced!</b>\n\n"
             f"{location}\n\n"
-            f"📝 New Question: {poll.question}\n"
-            f"✅ New Correct Answer: {correct_answer}\n\n"
+            f"📝 New Question: {html_lib.escape(poll.question)}\n"
+            f"✅ New Correct Answer: {html_lib.escape(correct_answer)}\n\n"
             f"The old question/options/answer have been replaced in place.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]]),
+            parse_mode='HTML'
         )
     
     async def handle_view_reports(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3543,10 +3597,11 @@ class QuizBot:
         if not context.args:
             current_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
             await update.message.reply_text(
-                f"📝 *Current Quiz Explanation:*\n`{current_explanation}`\n\n"
+                f"📝 <b>Current Quiz Explanation:</b>\n<code>{html_lib.escape(current_explanation)}</code>\n\n"
                 f"To change the explanation, use:\n"
-                f"`/setexplanation Your new explanation text here`\n\n"
-                f"💡 This text appears as the explanation in quiz polls."
+                f"<code>/setexplanation Your new explanation text here</code>\n\n"
+                f"💡 This text appears as the explanation in quiz polls.",
+                parse_mode='HTML'
             )
             return
         
@@ -3557,9 +3612,10 @@ class QuizBot:
         self.save_settings()
         
         await update.message.reply_text(
-            f"✅ *Quiz Explanation Updated!*\n\n"
-            f"New explanation:\n`{new_explanation}`\n\n"
-            f"This will be used in all future quiz polls."
+            f"✅ <b>Quiz Explanation Updated!</b>\n\n"
+            f"New explanation:\n<code>{html_lib.escape(new_explanation)}</code>\n\n"
+            f"This will be used in all future quiz polls.",
+            parse_mode='HTML'
         )
     
     async def set_explanation_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3573,10 +3629,11 @@ class QuizBot:
         current_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
         
         await update.callback_query.edit_message_text(
-            f"📝 *Set Quiz Explanation*\n\n"
-            f"Current explanation:\n`{current_explanation}`\n\n"
+            f"📝 <b>Set Quiz Explanation</b>\n\n"
+            f"Current explanation:\n<code>{html_lib.escape(current_explanation)}</code>\n\n"
             f"Please send the new explanation text.\n\n"
-            f"💡 This text appears as the explanation in quiz polls."
+            f"💡 This text appears as the explanation in quiz polls.",
+            parse_mode='HTML'
         )
         
         # Set a flag to expect explanation input
@@ -3598,9 +3655,10 @@ class QuizBot:
         context.user_data['waiting_for_explanation'] = False
         
         await update.message.reply_text(
-            f"✅ *Quiz Explanation Updated!*\n\n"
-            f"New explanation:\n`{new_explanation}`\n\n"
-            f"This will be used in all future quiz polls."
+            f"✅ <b>Quiz Explanation Updated!</b>\n\n"
+            f"New explanation:\n<code>{html_lib.escape(new_explanation)}</code>\n\n"
+            f"This will be used in all future quiz polls.",
+            parse_mode='HTML'
         )
     
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3928,7 +3986,8 @@ class QuizBot:
                     
                 await self.application.bot.send_message(
                     chat_id=group['chat_id'],
-                    text=f"📢 *Announcement*\n\n{message_text}\n\n- Admin"
+                    text=f"📢 <b>Announcement</b>\n\n{html_lib.escape(message_text)}\n\n- Admin",
+                    parse_mode='HTML'
                 )
                 sent_to += 1
                 await asyncio.sleep(0.5)  # Rate limiting
@@ -4502,7 +4561,7 @@ class QuizBot:
             return
         
         if new_sudo_id in self.sudo_users:
-            await update.message.reply_text(f"❌ User `{new_sudo_id}` is already a sudo user.")
+            await update.message.reply_text(f"❌ User `{new_sudo_id}` is already a sudo user.", parse_mode='Markdown')
             return
         
         # Save to database
@@ -4540,7 +4599,7 @@ class QuizBot:
             return
         
         if sudo_id not in self.sudo_users:
-            await update.message.reply_text(f"❌ User `{sudo_id}` is not a sudo user.")
+            await update.message.reply_text(f"❌ User `{sudo_id}` is not a sudo user.", parse_mode='Markdown')
             return
         
         # Remove from database
@@ -5551,6 +5610,14 @@ class QuizBot:
             await self.application.bot.delete_webhook(drop_pending_updates=True)
         except Exception as e:
             print(f"⚠️ delete_webhook skipped: {e}")
+        
+        # NEW: reset & set a clean "/" command menu (public list + full admin list)
+        try:
+            reset_and_set_commands()
+            print("📋 Command menu updated (public + admin)")
+        except Exception as e:
+            print(f"⚠️ Could not update command menu: {e}")
+        
         await self.application.updater.start_polling(drop_pending_updates=True)
         
         quiz_interval_hours = self.quiz_interval / 3600
