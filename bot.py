@@ -1204,17 +1204,17 @@ class QuizBot:
                 # (update.message is None for callback query updates)
                 reply_target = update.message or (update.callback_query.message if update.callback_query else None)
                 await reply_target.reply_text(
-                    f"👋 **Admin Dashboard**\n\n"
+                    f"👋 *Admin Dashboard*\n\n"
                     f"I'm your Quiz Bot! Choose an option below:\n\n"
-                    f"📊 **Statistics** - View detailed bot analytics\n"
-                    f"📝 **Add Quiz** - Select Subject → Quiz Folder, then send QUIZ MODE polls\n"
-                    f"🗂 **Manage Quiz Folders** - View/create/rename/delete subjects and folders\n"
-                    f"⚙️ **Settings** - Configure bot settings (Current: {quiz_interval_hours}h interval)\n"
-                    f"📢 **Broadcast** - Send message to all groups\n"
-                    f"👥 **Manage Groups** - View and manage groups\n"
-                    f"📋 **Export Data** - Export quizzes and stats\n"
-                    f"🔄 **Reset Quizzes** - Delete all saved quizzes\n"
-                    f"⚠️ **View Reports** - Check reported quizzes\n\n"
+                    f"📊 *Statistics* - View detailed bot analytics\n"
+                    f"📝 *Add Quiz* - Select Subject → Quiz Folder, then send QUIZ MODE polls\n"
+                    f"🗂 *Manage Quiz Folders* - View/create/rename/delete subjects and folders\n"
+                    f"⚙️ *Settings* - Configure bot settings (Current: {quiz_interval_hours}h interval)\n"
+                    f"📢 *Broadcast* - Send message to all groups\n"
+                    f"👥 *Manage Groups* - View and manage groups\n"
+                    f"📋 *Export Data* - Export quizzes and stats\n"
+                    f"🔄 *Reset Quizzes* - Delete all saved quizzes\n"
+                    f"⚠️ *View Reports* - Check reported quizzes\n\n"
                     f"To add a quiz: 📝 Add Quiz → Subject → Folder → send Quiz Mode polls → /done",
                     reply_markup=reply_markup,
                     parse_mode='Markdown'
@@ -1229,14 +1229,14 @@ class QuizBot:
                     support_url = SUPPORT_USERNAME if SUPPORT_USERNAME.startswith('http') else f"https://t.me/{SUPPORT_USERNAME}"
                     keyboard.append([InlineKeyboardButton("🆘 Support", url=support_url)])
                 await update.message.reply_text(
-                    "👋 **Welcome!**\n\n"
+                    "👋 *Welcome!*\n\n"
                     "I'm a Quiz Bot — I send fun quiz polls in groups and let you play quizzes right here in DM!\n\n"
-                    "➕ **Add me to your group** and make me an admin to start receiving quiz polls automatically.\n\n"
-                    "⚡ **Group Commands:**\n"
+                    "➕ *Add me to your group* and make me an admin to start receiving quiz polls automatically.\n\n"
+                    "⚡ *Group Commands:*\n"
                     "• /quiz - Browse and start a quiz (group admins)\n"
                     "• /rquiz - Send an immediate random quiz (group admins)\n"
                     "• /qreport - Report a quiz for review (reply to a quiz with this command)\n\n"
-                    "🎮 **Play Quizzes:**\n"
+                    "🎮 *Play Quizzes:*\n"
                     "• /quiz - Browse subjects and quiz folders, then play right here in private chat!\n"
                     "• /stop - End your running quiz and see your score (next question comes automatically after each answer!)\n\n"
                     "Need help? Tap 🆘 Support below.",
@@ -1383,7 +1383,7 @@ class QuizBot:
         if poll.correct_option_id is None:
             await update.message.reply_text(
                 "❌ This is a regular poll, not a quiz!\n\n"
-                "I only accept **QUIZ MODE** polls that have a correct answer set.\n\n"
+                "I only accept *QUIZ MODE* polls that have a correct answer set.\n\n"
                 "Please create a new poll and make sure to:\n"
                 "1. Enable 'Quiz Mode'\n"
                 "2. Set the correct answer\n"
@@ -2616,7 +2616,7 @@ class QuizBot:
         if not update.message.reply_to_message or not update.message.reply_to_message.poll:
             await update.message.reply_text(
                 "❌ Please reply to a quiz message with /qreport!\n\n"
-                "**Usage:**\n"
+                "*Usage:*\n"
                 "1. Find a quiz poll sent by the bot\n"
                 "2. Reply to that quiz message\n"
                 "3. Send `/qreport`\n\n"
@@ -2678,8 +2678,8 @@ class QuizBot:
         # keep the confirmation visible in DM so it doesn't feel like it vanished)
         try:
             confirmation_msg = await update.message.reply_text(
-                f"✅ **Quiz Reported Successfully!**\n\n"
-                f"📝 **Question:** {replied_poll.question[:100]}...\n\n"
+                f"✅ *Quiz Reported Successfully!*\n\n"
+                f"📝 *Question:* {replied_poll.question[:100]}...\n\n"
                 f"The quiz has been forwarded to the admin for review.\n"
                 f"Thank you for helping improve the quiz quality!" +
                 ("\n\n⏰ _This confirmation will self-destruct in 10 seconds..._" if not is_private else "")
@@ -2720,8 +2720,8 @@ class QuizBot:
         if not context.args:
             await update.message.reply_text(
                 "❌ Please provide a report ID.\n\n"
-                "**Usage:** `/view <report_id>`\n\n"
-                "**Example:** `/view report_123456789_123`\n\n"
+                "*Usage:* `/view <report_id>`\n\n"
+                "*Example:* `/view report_123456789_123`\n\n"
                 "You can find report IDs in the reports dashboard."
                 ,
                 parse_mode='Markdown'
@@ -2948,7 +2948,7 @@ class QuizBot:
         
         # Prepare response
         response_text = (
-            f"✅ **Quiz Deleted Successfully!**\n\n"
+            f"✅ *Quiz Deleted Successfully!*\n\n"
             f"🗑️ Deleted {deleted_count} quiz(es) with matching question:\n"
             f"`{report['question'][:100]}...`\n\n"
         )
@@ -3012,7 +3012,7 @@ class QuizBot:
         self.quizzes = self.load_quizzes()
         
         response_text = (
-            f"✅ **All Similar Quizzes Deleted!**\n\n"
+            f"✅ *All Similar Quizzes Deleted!*\n\n"
             f"🗑️ Deleted {deleted_count} similar quizzes\n"
             f"📝 Total deleted for this report: {report.get('deleted_quizzes', 0) + deleted_count}\n\n"
             f"The quiz database has been cleaned."
@@ -3038,7 +3038,7 @@ class QuizBot:
         })
         
         await query.edit_message_text(
-            "✅ **Report Ignored**\n\n"
+            "✅ *Report Ignored*\n\n"
             "The quiz report has been marked as ignored.\n"
             "No action was taken on the quiz.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Close", callback_data="close_report")]])
@@ -3067,7 +3067,7 @@ class QuizBot:
         
         if not similar_quizzes:
             response_text = (
-                f"📝 **No Similar Quizzes Found**\n\n"
+                f"📝 *No Similar Quizzes Found*\n\n"
                 f"The reported question:\n`{report['question']}`\n\n"
                 f"Was not found in the database.\n"
                 f"It might have been already deleted or never saved."
@@ -3078,7 +3078,7 @@ class QuizBot:
                 [InlineKeyboardButton("✅ Close", callback_data="close_report")]
             ]
         else:
-            response_text = f"📝 **Found {len(similar_quizzes)} Similar Quiz(es)**\n\n"
+            response_text = f"📝 *Found {len(similar_quizzes)} Similar Quiz(es)*\n\n"
             
             for i, quiz in enumerate(similar_quizzes[:10], 1):  # Show only first 10
                 status = "✅ Active" if quiz.get('is_active', True) else "❌ Inactive"
@@ -3086,7 +3086,7 @@ class QuizBot:
                 manual_count = quiz.get('manual_sent_count', 0)
                 
                 response_text += (
-                    f"**{i}. {quiz['question'][:80]}...**\n"
+                    f"*{i}. {quiz['question'][:80]}...*\n"
                     f"   Status: {status} | Auto: {sent_count} | Manual: {manual_count}\n"
                     f"   ID: `{quiz['_id']}`\n\n"
                 )
@@ -3094,7 +3094,7 @@ class QuizBot:
             if len(similar_quizzes) > 10:
                 response_text += f"... and {len(similar_quizzes) - 10} more similar quizzes\n\n"
             
-            response_text += "**Options:**"
+            response_text += "*Options:*"
             
             keyboard = [
                 [
@@ -3267,7 +3267,7 @@ class QuizBot:
             }})
         
         await update.message.reply_text(
-            f"✅ **Question Updated!**\n\n"
+            f"✅ *Question Updated!*\n\n"
             f"📝 New question: {new_question}\n\n"
             f"The quiz has been updated in place — everything else is unchanged.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]])
@@ -3317,7 +3317,7 @@ class QuizBot:
         if quiz.get('subfolder'):
             location += f" → 📂 {quiz['subfolder']}"
         await update.message.reply_text(
-            f"✅ **Quiz Replaced!**\n\n"
+            f"✅ *Quiz Replaced!*\n\n"
             f"{location}\n\n"
             f"📝 New Question: {poll.question}\n"
             f"✅ New Correct Answer: {correct_answer}\n\n"
@@ -3336,9 +3336,9 @@ class QuizBot:
         
         if not pending_reports:
             response_text = (
-                f"📊 **Quiz Reports Dashboard**\n\n"
+                f"📊 *Quiz Reports Dashboard*\n\n"
                 f"✅ No pending reports!\n\n"
-                f"📈 **Statistics:**\n"
+                f"📈 *Statistics:*\n"
                 f"• Total reports: {len(total_reports)}\n"
                 f"• Pending: 0\n"
                 f"• Resolved: {len([r for r in total_reports if r['status'] != 'pending'])}\n"
@@ -3347,8 +3347,8 @@ class QuizBot:
             keyboard = [[InlineKeyboardButton("✅ Close", callback_data="close_report")]]
         else:
             response_text = (
-                f"📊 **Quiz Reports Dashboard**\n\n"
-                f"⚠️ **Pending Reports: {len(pending_reports)}**\n\n"
+                f"📊 *Quiz Reports Dashboard*\n\n"
+                f"⚠️ *Pending Reports: {len(pending_reports)}*\n\n"
             )
             
             # Create buttons for each report
@@ -3358,7 +3358,7 @@ class QuizBot:
                 link_bit = (f"[View Original]({report['original_message_link']})\n"
                             if report.get('original_message_link') else "🔒 Private chat report\n")
                 response_text += (
-                    f"{i}. **{report['question'][:60]}...**\n"
+                    f"{i}. *{report['question'][:60]}...*\n"
                     f"   👤 {report['reported_by']['first_name']} | "
                     f"👥 {report['group_name']}\n"
                     f"   🕐 {report_time} | "
@@ -3372,7 +3372,7 @@ class QuizBot:
             if len(pending_reports) > 5:
                 response_text += f"... and {len(pending_reports) - 5} more pending reports\n\n"
             
-            response_text += f"📈 **Statistics:**\n"
+            response_text += f"📈 *Statistics:*\n"
             response_text += f"• Total reports: {len(total_reports)}\n"
             response_text += f"• Pending: {len(pending_reports)}\n"
             response_text += f"• Resolved: {len(total_reports) - len(pending_reports)}\n\n"
@@ -3398,7 +3398,7 @@ class QuizBot:
         deleted_count = result.deleted_count if result else 0
         
         await query.edit_message_text(
-            f"✅ **Resolved Reports Cleared**\n\n"
+            f"✅ *Resolved Reports Cleared*\n\n"
             f"🗑️ Deleted {deleted_count} resolved reports.\n"
             f"Only pending reports remain in the database.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 View Reports", callback_data="view_reports")]])
@@ -3445,7 +3445,7 @@ class QuizBot:
         
         if not context.args or context.args[0].lower() != 'confirm':
             await update.message.reply_text(
-                "⚠️ **Danger: Reset All Quizzes** ⚠️\n\n"
+                "⚠️ *Danger: Reset All Quizzes* ⚠️\n\n"
                 "This will delete ALL saved quizzes permanently!\n\n"
                 "If you're sure, use:\n"
                 "`/reset confirm`\n\n"
@@ -3468,7 +3468,7 @@ class QuizBot:
         self.save_stats()
         
         await update.message.reply_text(
-            f"✅ **All Quizzes Reset!**\n\n"
+            f"✅ *All Quizzes Reset!*\n\n"
             f"🗑️ Deleted {deleted_count} quizzes\n"
             f"📝 Quiz database is now empty\n\n"
             f"Use /start to add new quizzes!"
@@ -3491,7 +3491,7 @@ class QuizBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.callback_query.edit_message_text(
-            f"⚠️ **Danger: Reset All Quizzes** ⚠️\n\n"
+            f"⚠️ *Danger: Reset All Quizzes* ⚠️\n\n"
             f"This will delete ALL {len(self.quizzes)} saved quizzes permanently!\n\n"
             f"❌ All quiz data will be lost\n"
             f"❌ Cannot be undone\n"
@@ -3523,7 +3523,7 @@ class QuizBot:
         self.save_stats()
         
         await update.callback_query.edit_message_text(
-            f"✅ **All Quizzes Reset Successfully!**\n\n"
+            f"✅ *All Quizzes Reset Successfully!*\n\n"
             f"🗑️ Deleted {deleted_count} quizzes\n"
             f"📝 Quiz database is now empty\n\n"
             f"Use the menu below to add new quizzes!",
@@ -3543,7 +3543,7 @@ class QuizBot:
         if not context.args:
             current_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
             await update.message.reply_text(
-                f"📝 **Current Quiz Explanation:**\n`{current_explanation}`\n\n"
+                f"📝 *Current Quiz Explanation:*\n`{current_explanation}`\n\n"
                 f"To change the explanation, use:\n"
                 f"`/setexplanation Your new explanation text here`\n\n"
                 f"💡 This text appears as the explanation in quiz polls."
@@ -3557,7 +3557,7 @@ class QuizBot:
         self.save_settings()
         
         await update.message.reply_text(
-            f"✅ **Quiz Explanation Updated!**\n\n"
+            f"✅ *Quiz Explanation Updated!*\n\n"
             f"New explanation:\n`{new_explanation}`\n\n"
             f"This will be used in all future quiz polls."
         )
@@ -3573,7 +3573,7 @@ class QuizBot:
         current_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
         
         await update.callback_query.edit_message_text(
-            f"📝 **Set Quiz Explanation**\n\n"
+            f"📝 *Set Quiz Explanation*\n\n"
             f"Current explanation:\n`{current_explanation}`\n\n"
             f"Please send the new explanation text.\n\n"
             f"💡 This text appears as the explanation in quiz polls."
@@ -3598,7 +3598,7 @@ class QuizBot:
         context.user_data['waiting_for_explanation'] = False
         
         await update.message.reply_text(
-            f"✅ **Quiz Explanation Updated!**\n\n"
+            f"✅ *Quiz Explanation Updated!*\n\n"
             f"New explanation:\n`{new_explanation}`\n\n"
             f"This will be used in all future quiz polls."
         )
@@ -3634,38 +3634,38 @@ class QuizBot:
         quiz_interval_hours = self.quiz_interval / 3600
         
         stats_text = (
-            f"📊 **Detailed Bot Statistics**\n\n"
-            f"📝 **Quizzes Database**\n"
+            f"📊 *Detailed Bot Statistics*\n\n"
+            f"📝 *Quizzes Database*\n"
             f"   • Total quizzes: {total_quizzes}\n"
             f"   • Subjects: {len(self.get_subjects())}\n"
             f"   • Quizzes added: {quizzes_added}\n"
             f"   • Most sent quiz: {most_sent['sent_count'] if most_sent else 0} times\n"
             f"   • Quizzes deleted by reports: {quizzes_deleted_by_reports}\n\n"
             
-            f"👥 **Groups Analytics**\n"
+            f"👥 *Groups Analytics*\n"
             f"   • Total groups: {total_groups}\n"
             f"   • Active groups: {active_groups_count}\n"
             f"   • Recently active: {recently_active}\n"
             f"   • Total quizzes sent: {total_quizzes_sent}\n"
             f"   • Manual quizzes sent: {manual_quizzes_sent}\n\n"
             
-            f"🎮 **User Quizzes (/quiz)**\n"
+            f"🎮 *User Quizzes (/quiz)*\n"
             f"   • Sessions started: {self.stats.get('user_quiz_sessions', 0)}\n"
             f"   • Questions served: {self.stats.get('user_quizzes_sent', 0)}\n"
             f"   • Correct answers: {self.stats.get('user_quiz_correct', 0)}\n\n"
             
-            f"⚠️ **Quiz Reports**\n"
+            f"⚠️ *Quiz Reports*\n"
             f"   • Reports received: {quiz_reports_received}\n"
             f"   • Pending reports: {len(self.mongo.find('quiz_reports', {'status': 'pending'}))}\n"
             f"   • Resolved reports: {len(self.mongo.find('quiz_reports', {'status': {'$ne': 'pending'}}))}\n\n"
             
-            f"⏰ **Performance**\n"
+            f"⏰ *Performance*\n"
             f"   • Bot started: {datetime.fromisoformat(self.stats['bot_start_time']).strftime('%Y-%m-%d %H:%M')}\n"
             f"   • Last quiz sent: {datetime.fromisoformat(self.stats['last_quiz_sent']).strftime('%Y-%m-%d %H:%M') if self.stats['last_quiz_sent'] else 'Never'}\n"
             f"   • Quiz interval: {quiz_interval_hours} hours\n"
             f"   • Next quiz in: ~{quiz_interval_hours} hours\n\n"
             
-            f"📈 **Engagement**\n"
+            f"📈 *Engagement*\n"
             f"   • Avg quizzes per group: {total_quizzes_sent/total_groups if total_groups > 0 else 0:.1f}\n"
             f"   • Total engagement score: {sum(self.stats['group_engagement'].values())}\n"
         )
@@ -3697,18 +3697,18 @@ class QuizBot:
         current_explanation = self.settings.get('quiz_explanation', "Check back later for results!")
         
         settings_text = (
-            f"⚙️ **Bot Settings**\n\n"
-            f"🕐 **Quiz Interval**: {quiz_interval_hours} hours\n"
+            f"⚙️ *Bot Settings*\n\n"
+            f"🕐 *Quiz Interval*: {quiz_interval_hours} hours\n"
             f"   - Current delay between random quizzes\n\n"
-            f"📝 **Quiz Explanation**:\n`{current_explanation}`\n"
+            f"📝 *Quiz Explanation*:\n`{current_explanation}`\n"
             f"   - Text shown in quiz polls\n\n"
-            f"📊 **Database**: {'MongoDB' if self.mongo.is_connected() else 'In-Memory'}\n"
+            f"📊 *Database*: {'MongoDB' if self.mongo.is_connected() else 'In-Memory'}\n"
             f"   - Data persistence status\n\n"
-            f"📚 **Subjects**: {len(self.get_subjects())}\n"
-            f"👥 **Active Groups**: {len([g for g in self.groups if g.get('is_active', True)])}\n"
-            f"📝 **Active Quizzes**: {len([q for q in self.quizzes if q.get('is_active', True)])}\n"
-            f"🎯 **Manual Quizzes Sent**: {self.stats.get('manual_quizzes_sent', 0)}\n"
-            f"⚠️ **Quiz Reports**: {self.stats.get('quiz_reports_received', 0)}\n\n"
+            f"📚 *Subjects*: {len(self.get_subjects())}\n"
+            f"👥 *Active Groups*: {len([g for g in self.groups if g.get('is_active', True)])}\n"
+            f"📝 *Active Quizzes*: {len([q for q in self.quizzes if q.get('is_active', True)])}\n"
+            f"🎯 *Manual Quizzes Sent*: {self.stats.get('manual_quizzes_sent', 0)}\n"
+            f"⚠️ *Quiz Reports*: {self.stats.get('quiz_reports_received', 0)}\n\n"
             f"💡 Use /setdelay <time> to change the quiz interval\n"
             f"💡 Use /setexplanation to change quiz explanation\n"
             f"💡 Group admins can use /rquiz for immediate quizzes\n"
@@ -3744,14 +3744,14 @@ class QuizBot:
         if not context.args:
             await update.message.reply_text(
                 "❌ Please specify the interval.\n\n"
-                "**Usage:** `/setdelay <time>`\n\n"
-                "**Examples:**\n"
+                "*Usage:* `/setdelay <time>`\n\n"
+                "*Examples:*\n"
                 "• `/setdelay 2h` - 2 hours\n"
                 "• `/setdelay 30m` - 30 minutes\n"
                 "• `/setdelay 1.5h` - 1.5 hours\n"
                 "• `/setdelay 90m` - 90 minutes\n"
                 "• `/setdelay 2` - 2 hours (default)\n\n"
-                f"**Current interval:** {self.quiz_interval / 3600} hours"
+                f"*Current interval:* {self.quiz_interval / 3600} hours"
                 ,
                 parse_mode='Markdown'
             )
@@ -3763,13 +3763,13 @@ class QuizBot:
         if new_interval is None:
             await update.message.reply_text(
                 "❌ Invalid time format!\n\n"
-                "**Valid formats:**\n"
+                "*Valid formats:*\n"
                 "• `2h` or `2hr` - 2 hours\n"
                 "• `30m` or `30min` - 30 minutes\n"
                 "• `1.5h` - 1.5 hours\n"
                 "• `90m` - 90 minutes\n"
                 "• `2` - 2 hours (default)\n\n"
-                f"**Current interval:** {self.quiz_interval / 3600} hours"
+                f"*Current interval:* {self.quiz_interval / 3600} hours"
                 ,
                 parse_mode='Markdown'
             )
@@ -3795,7 +3795,7 @@ class QuizBot:
         old_display = f"{old_interval / 3600:.1f} hours" if old_interval >= 3600 else f"{old_interval / 60:.1f} minutes"
         
         await update.message.reply_text(
-            f"✅ **Quiz interval updated!**\n\n"
+            f"✅ *Quiz interval updated!*\n\n"
             f"📅 Old interval: {old_display}\n"
             f"📅 New interval: {display_time}\n\n"
             f"Next quiz will be sent in approximately {display_time}."
@@ -3812,9 +3812,9 @@ class QuizBot:
             return
         
         await update.callback_query.edit_message_text(
-            "🕐 **Set Quiz Interval**\n\n"
+            "🕐 *Set Quiz Interval*\n\n"
             "Please send the new interval.\n\n"
-            "**Examples:**\n"
+            "*Examples:*\n"
             "• `2h` - 2 hours\n"
             "• `30m` - 30 minutes\n"
             "• `1.5h` - 1.5 hours\n"
@@ -3841,13 +3841,13 @@ class QuizBot:
         if new_interval is None:
             await update.message.reply_text(
                 "❌ Invalid time format!\n\n"
-                "**Valid formats:**\n"
+                "*Valid formats:*\n"
                 "• `2h` or `2hr` - 2 hours\n"
                 "• `30m` or `30min` - 30 minutes\n"
                 "• `1.5h` - 1.5 hours\n"
                 "• `90m` - 90 minutes\n"
                 "• `2` - 2 hours (default)\n\n"
-                f"**Current interval:** {self.quiz_interval / 3600} hours"
+                f"*Current interval:* {self.quiz_interval / 3600} hours"
                 ,
                 parse_mode='Markdown'
             )
@@ -3875,7 +3875,7 @@ class QuizBot:
         old_display = f"{old_interval / 3600:.1f} hours" if old_interval >= 3600 else f"{old_interval / 60:.1f} minutes"
         
         await update.message.reply_text(
-            f"✅ **Quiz interval updated!**\n\n"
+            f"✅ *Quiz interval updated!*\n\n"
             f"📅 Old interval: {old_display}\n"
             f"📅 New interval: {display_time}\n\n"
             f"Next quiz will be sent in approximately {display_time}."
@@ -3899,9 +3899,9 @@ class QuizBot:
         active_groups = len([g for g in self.groups if g.get('is_active', True)])
         
         message = (
-            f"📢 **Broadcast Mode Activated**\n\n"
+            f"📢 *Broadcast Mode Activated*\n\n"
             f"Please send the message you want to broadcast to all {active_groups} active groups.\n\n"
-            f"⚠️ **Warning:** This will send your message to all active groups immediately!\n"
+            f"⚠️ *Warning:* This will send your message to all active groups immediately!\n"
             f"✏️ Type your message now..."
         )
         
@@ -3928,7 +3928,7 @@ class QuizBot:
                     
                 await self.application.bot.send_message(
                     chat_id=group['chat_id'],
-                    text=f"📢 **Announcement**\n\n{message_text}\n\n- Admin"
+                    text=f"📢 *Announcement*\n\n{message_text}\n\n- Admin"
                 )
                 sent_to += 1
                 await asyncio.sleep(0.5)  # Rate limiting
@@ -3948,7 +3948,7 @@ class QuizBot:
         
         # Send report to admin
         report = (
-            f"✅ **Broadcast Completed**\n\n"
+            f"✅ *Broadcast Completed*\n\n"
             f"📤 Sent to: {sent_to}/{len(active_groups)} active groups\n"
             f"✅ Successful: {sent_to}\n"
             f"❌ Failed: {len(failed_groups)}\n"
@@ -4041,7 +4041,7 @@ class QuizBot:
             
             # Send summary
             summary = (
-                f"✅ **Data Export Completed**\n\n"
+                f"✅ *Data Export Completed*\n\n"
                 f"📁 Files exported:\n"
                 f"• quizzes_export.csv ({len(self.quizzes)} quizzes)\n"
                 f"• groups_export.csv ({len(self.groups)} groups)\n"
@@ -4075,8 +4075,8 @@ class QuizBot:
         inactive_groups = total_groups - active_groups
         
         groups_text = (
-            f"👥 **Group Management**\n\n"
-            f"📊 **Overview**\n"
+            f"👥 *Group Management*\n\n"
+            f"📊 *Overview*\n"
             f"• Total groups: {total_groups}\n"
             f"• Active groups: {active_groups}\n"
             f"• Inactive groups: {inactive_groups}\n\n"
@@ -4087,7 +4087,7 @@ class QuizBot:
         sorted_groups = sorted(active_groups_list, key=lambda x: x.get('quizzes_received', 0), reverse=True)[:5]
         
         if sorted_groups:
-            groups_text += "🏆 **Top 5 Active Groups:**\n"
+            groups_text += "🏆 *Top 5 Active Groups:*\n"
             for i, group in enumerate(sorted_groups, 1):
                 groups_text += f"{i}. {group['title']} - {group.get('quizzes_received', 0)} auto + {group.get('manual_quizzes_received', 0)} manual quizzes\n"
         
@@ -4127,7 +4127,7 @@ class QuizBot:
         self.groups = self.load_groups()
         
         await update.callback_query.edit_message_text(
-            f"✅ **Cleaned {len(inactive_groups)} inactive groups**\n\n"
+            f"✅ *Cleaned {len(inactive_groups)} inactive groups*\n\n"
             f"Removed groups that were marked as inactive (likely removed the bot).\n"
             f"Current active groups: {len([g for g in self.groups if g.get('is_active', True)])}"
         ,
@@ -4151,7 +4151,7 @@ class QuizBot:
         self.groups = self.load_groups()
         
         await update.callback_query.edit_message_text(
-            f"✅ **All groups reactivated!**\n\n"
+            f"✅ *All groups reactivated!*\n\n"
             f"All {len(self.groups)} groups have been marked as active and will receive quizzes."
         ,
             parse_mode='Markdown'
@@ -4197,11 +4197,11 @@ class QuizBot:
         # Show loading message
         loading_msg = await update.message.reply_text("🔄 Fetching group links... This may take a moment.")
         
-        groups_text = f"👥 **Groups List ({len(real_groups)} total)**\n\n"
+        groups_text = f"👥 *Groups List ({len(real_groups)} total)*\n\n"
         groups_text += f"🟢 Active: {len(active_groups)}\n"
         groups_text += f"🔴 Inactive: {len(inactive_groups)}\n\n"
         
-        all_links_text = "📋 **Group List with Links**\n\n"
+        all_links_text = "📋 *Group List with Links*\n\n"
         failed_groups = []
         success_count = 0
         
@@ -4234,7 +4234,7 @@ class QuizBot:
                         invite_link = None
                 
                 # Add to detailed list
-                all_links_text += f"{i}. {status} **{group_title}**\n"
+                all_links_text += f"{i}. {status} *{group_title}*\n"
                 all_links_text += f"   • ID: `{chat_id}`\n"
                 all_links_text += f"   • Link: {link_text}\n"
                 all_links_text += f"   • Auto Quizzes: {group.get('quizzes_received', 0)}\n"
@@ -4246,7 +4246,7 @@ class QuizBot:
                 all_links_text += "\n"
                 
                 # Add to summary text
-                groups_text += f"{i}. {status} **{group_title}**\n"
+                groups_text += f"{i}. {status} *{group_title}*\n"
                 if invite_link:
                     groups_text += f"   🔗 {invite_link}\n"
                 groups_text += f"   📊 Auto: {group.get('quizzes_received', 0)} | Manual: {group.get('manual_quizzes_received', 0)}\n\n"
@@ -4254,11 +4254,11 @@ class QuizBot:
             except Exception as e:
                 # Group not accessible or bot removed
                 failed_groups.append(group_title)
-                all_links_text += f"{i}. 🔴 **{group_title}** (❌ Bot not in group)\n"
+                all_links_text += f"{i}. 🔴 *{group_title}* (❌ Bot not in group)\n"
                 all_links_text += f"   • ID: `{chat_id}`\n"
                 all_links_text += f"   • Last active: {group.get('last_activity', 'Never')[:10]}\n\n"
                 
-                groups_text += f"{i}. 🔴 **{group_title}** (Bot removed)\n\n"
+                groups_text += f"{i}. 🔴 *{group_title}* (Bot removed)\n\n"
                 
                 # Mark as inactive
                 group['is_active'] = False
@@ -4275,7 +4275,7 @@ class QuizBot:
         
         # Send summary first
         summary_text = (
-            f"📊 **Groups Summary**\n\n"
+            f"📊 *Groups Summary*\n\n"
             f"✅ Successfully fetched links: {success_count}/{len(real_groups)}\n"
             f"❌ Failed/Inaccessible: {len(failed_groups)}\n"
             f"🟢 Active groups: {len(active_groups)}\n"
@@ -4283,7 +4283,7 @@ class QuizBot:
         )
         
         if failed_groups:
-            summary_text += "❌ **Failed Groups (Bot not in group):**\n"
+            summary_text += "❌ *Failed Groups (Bot not in group):*\n"
             for group in failed_groups[:5]:  # Show only first 5
                 summary_text += f"• {group}\n"
             if len(failed_groups) > 5:
@@ -4292,7 +4292,7 @@ class QuizBot:
         
         # Add instructions
         summary_text += (
-            "📝 **Note:** Links expire in 7 days\n"
+            "📝 *Note:* Links expire in 7 days\n"
             "🔄 Use /refreshgroups to update group status\n"
             "🗑️ Inactive groups are automatically cleaned"
         )
@@ -4342,10 +4342,10 @@ class QuizBot:
         active_groups = [g for g in real_groups if g.get('is_active', True)]
         inactive_groups = [g for g in real_groups if not g.get('is_active', True)]
         
-        groups_text = f"👥 **Groups Summary ({len(real_groups)} total)**\n\n"
+        groups_text = f"👥 *Groups Summary ({len(real_groups)} total)*\n\n"
         
         if active_groups:
-            groups_text += f"🟢 **Active Groups ({len(active_groups)})**\n"
+            groups_text += f"🟢 *Active Groups ({len(active_groups)})*\n"
             for i, group in enumerate(active_groups[:20], 1):  # Show only first 20
                 groups_text += f"{i}. {group.get('title', 'Unknown')} (ID: `{group['chat_id']}`)\n"
                 groups_text += f"   📊 Auto: {group.get('quizzes_received', 0)} | Manual: {group.get('manual_quizzes_received', 0)}\n"
@@ -4356,7 +4356,7 @@ class QuizBot:
             groups_text += "\n"
         
         if inactive_groups:
-            groups_text += f"🔴 **Inactive Groups ({len(inactive_groups)})**\n"
+            groups_text += f"🔴 *Inactive Groups ({len(inactive_groups)})*\n"
             for i, group in enumerate(inactive_groups[:10], 1):  # Show only first 10
                 groups_text += f"{i}. {group.get('title', 'Unknown')} (ID: `{group['chat_id']}`)\n"
             
@@ -4366,7 +4366,7 @@ class QuizBot:
             groups_text += "\n"
         
         groups_text += (
-            f"📊 **Stats:**\n"
+            f"📊 *Stats:*\n"
             f"• Total quizzes sent to all groups: {self.stats.get('total_quizzes_sent', 0)}\n"
             f"• Manual quizzes sent: {self.stats.get('manual_quizzes_sent', 0)}\n"
             f"• Active groups percentage: {(len(active_groups)/len(real_groups)*100 if real_groups else 0):.1f}%\n\n"
@@ -4400,8 +4400,8 @@ class QuizBot:
         
         loading_msg = await update.message.reply_text("🔄 Generating group links...")
         
-        links_text = "🔗 **Group Invite Links**\n\n"
-        links_only = "📋 **Links Only (for export):**\n\n"
+        links_text = "🔗 *Group Invite Links*\n\n"
+        links_only = "📋 *Links Only (for export):*\n\n"
         
         success_count = 0
         
@@ -4425,24 +4425,24 @@ class QuizBot:
                     # Try to export existing link
                     invite_link = await context.bot.export_chat_invite_link(chat_id)
                 
-                links_text += f"• **{group_title}**\n{invite_link}\n\n"
+                links_text += f"• *{group_title}*\n{invite_link}\n\n"
                 links_only += f"{invite_link}\n"
                 success_count += 1
                 
             except Exception as e:
-                links_text += f"• **{group_title}** - ❌ No link available\n\n"
+                links_text += f"• *{group_title}* - ❌ No link available\n\n"
             
             await asyncio.sleep(0.1)
         
         await loading_msg.delete()
         
         summary = (
-            f"✅ **Group Links Export**\n\n"
+            f"✅ *Group Links Export*\n\n"
             f"📊 Generated {success_count} links from {len(real_groups)} groups\n"
             f"⏰ Links expire in 7 days\n"
             f"📋 Copy links from below section\n\n"
-            f"💡 **Tip:** Use `/grouplist` for detailed view\n"
-            f"💡 **Tip:** Use `/groups` for quick overview"
+            f"💡 *Tip:* Use `/grouplist` for detailed view\n"
+            f"💡 *Tip:* Use `/groups` for quick overview"
         )
         
         await update.message.reply_text(summary)
@@ -4457,7 +4457,7 @@ class QuizBot:
             await update.message.reply_text(links_text, parse_mode='Markdown')
         
         # Send links-only section
-        await update.message.reply_text("📋 **Copy-paste section:**",
+        await update.message.reply_text("📋 *Copy-paste section:*",
             parse_mode='Markdown'
         )
         if len(links_only) > 4000:
@@ -4484,7 +4484,7 @@ class QuizBot:
         if not context.args:
             await update.message.reply_text(
                 "❌ Please provide a user ID.\n\n"
-                "**Usage:** `/addsudo <user_id>`\n\n"
+                "*Usage:* `/addsudo <user_id>`\n\n"
                 "You can get a user's ID by having them send any message to the bot."
                 ,
                 parse_mode='Markdown'
@@ -4509,7 +4509,7 @@ class QuizBot:
         self.save_sudo_user(new_sudo_id)
         
         await update.message.reply_text(
-            f"✅ **Sudo user added!**\n\n"
+            f"✅ *Sudo user added!*\n\n"
             f"User ID: `{new_sudo_id}`\n\n"
             f"This user can now use all admin commands."
         ,
@@ -4527,7 +4527,7 @@ class QuizBot:
         if not context.args:
             await update.message.reply_text(
                 "❌ Please provide a user ID.\n\n"
-                "**Usage:** `/remsudo <user_id>`"
+                "*Usage:* `/remsudo <user_id>`"
                 ,
                 parse_mode='Markdown'
             )
@@ -4547,7 +4547,7 @@ class QuizBot:
         self.remove_sudo_user(sudo_id)
         
         await update.message.reply_text(
-            f"✅ **Sudo user removed!**\n\n"
+            f"✅ *Sudo user removed!*\n\n"
             f"User ID: `{sudo_id}`\n\n"
             f"This user no longer has admin privileges."
         ,
@@ -5435,15 +5435,15 @@ class QuizBot:
         status = "🟢 Active" if group.get('is_active', True) else "🔴 Inactive"
         
         stats_text = (
-            f"📊 **Group Statistics**\n\n"
-            f"🏷️ **Name:** {group['title']}\n"
-            f"🆔 **ID:** {group['chat_id']}\n"
-            f"📅 **Added:** {datetime.fromisoformat(group['added_date']).strftime('%Y-%m-%d')}\n"
-            f"📤 **Auto Quizzes Received:** {group.get('quizzes_received', 0)}\n"
-            f"🎯 **Manual Quizzes Received:** {group.get('manual_quizzes_received', 0)}\n"
-            f"👥 **Members:** {group.get('member_count', 'Unknown')}\n"
-            f"🕐 **Last Activity:** {datetime.fromisoformat(group['last_activity']).strftime('%Y-%m-%d %H:%M')}\n"
-            f"📊 **Status:** {status}\n"
+            f"📊 *Group Statistics*\n\n"
+            f"🏷️ *Name:* {group['title']}\n"
+            f"🆔 *ID:* {group['chat_id']}\n"
+            f"📅 *Added:* {datetime.fromisoformat(group['added_date']).strftime('%Y-%m-%d')}\n"
+            f"📤 *Auto Quizzes Received:* {group.get('quizzes_received', 0)}\n"
+            f"🎯 *Manual Quizzes Received:* {group.get('manual_quizzes_received', 0)}\n"
+            f"👥 *Members:* {group.get('member_count', 'Unknown')}\n"
+            f"🕐 *Last Activity:* {datetime.fromisoformat(group['last_activity']).strftime('%Y-%m-%d %H:%M')}\n"
+            f"📊 *Status:* {status}\n"
         )
         
         keyboard = [
