@@ -1114,6 +1114,32 @@ class QuizBot:
         """Check if user is bot admin (main admin or sudo user)"""
         return user_id == ADMIN_USER_ID or user_id in self.sudo_users
     
+    @staticmethod
+    def md_escape(text):
+        """Escape special characters for Telegram legacy Markdown (parse_mode='Markdown').
+        Use this around any dynamic/user-supplied value (group titles, subject/folder
+        names, quiz text, etc.) that gets inserted as plain/bold text into a
+        Markdown-formatted message, so stray _ * ` [ characters don't break
+        formatting or raise parse errors."""
+        if text is None:
+            return ""
+        text = str(text)
+        for ch in ('_', '*', '`', '['):
+            text = text.replace(ch, '\\' + ch)
+        return text
+    
+    @staticmethod
+    def md_escape_link_text(text):
+        """Escape special characters for text used as a Markdown link LABEL,
+        i.e. the part inside [ ]. Doesn't escape '[' (not needed there) but
+        does escape ']' so the label can't prematurely close the link."""
+        if text is None:
+            return ""
+        text = str(text)
+        for ch in ('_', '*', '`', ']'):
+            text = text.replace(ch, '\\' + ch)
+        return text
+    
     async def is_quiz_allowed_user(self, context, chat_id, user_id):
         """FIX: shared check for the WHOLE /quiz flow (command + every button that
         follows it) — bot admin/sudo, OR a real Telegram admin/creator of that
@@ -3269,7 +3295,7 @@ class QuizBot:
         if not similar_quizzes:
             response_text = (
                 f"📝 *No Similar Quizzes Found*\n\n"
-                f"The reported question:\n`{report['question']}`\n\n"
+                f"The reported question:\n`{self.md_escape(report['question'])}`\n\n"
                 f"Was not found in the database.\n"
                 f"It might have been already deleted or never saved."
             )
@@ -3287,7 +3313,7 @@ class QuizBot:
                 manual_count = quiz.get('manual_sent_count', 0)
                 
                 response_text += (
-                    f"*{i}. {quiz['question'][:80]}...*\n"
+                    f"*{i}. {self.md_escape(quiz['question'][:80])}...*\n"
                     f"   Status: {status} | Auto: {sent_count} | Manual: {manual_count}\n"
                     f"   ID: `{quiz['_id']}`\n\n"
                 )
@@ -3309,7 +3335,7 @@ class QuizBot:
             ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(response_text, reply_markup=reply_markup)
+        await query.edit_message_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def handle_edit_quiz_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
         """NEW: Entry point for '✏️ Edit / Replace Quiz' on a report — locates the exact
@@ -3561,9 +3587,9 @@ class QuizBot:
                 link_bit = (f"[View Original]({report['original_message_link']})\n"
                             if report.get('original_message_link') else "🔒 Private chat report\n")
                 response_text += (
-                    f"{i}. *{report['question'][:60]}...*\n"
-                    f"   👤 {report['reported_by']['first_name']} | "
-                    f"👥 {report['group_name']}\n"
+                    f"{i}. *{self.md_escape(report['question'][:60])}...*\n"
+                    f"   👤 {self.md_escape(report['reported_by']['first_name'])} | "
+                    f"👥 {self.md_escape(report['group_name'])}\n"
                     f"   🕐 {report_time} | "
                     f"{link_bit}"
                     f"   ID: `{report['_id']}`\n\n"
@@ -3936,9 +3962,9 @@ class QuizBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if update.callback_query:
-            await update.callback_query.edit_message_text(settings_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(settings_text, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text(settings_text, reply_markup=reply_markup)
+            await update.message.reply_text(settings_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def set_quiz_interval_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /setdelay command directly"""
@@ -4113,9 +4139,9 @@ class QuizBot:
         )
         
         if update.callback_query:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text(message, reply_markup=reply_markup)
+            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def send_broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str):
         """Send broadcast message to all groups"""
@@ -4163,11 +4189,11 @@ class QuizBot:
         )
         
         if failed_groups:
-            report += f"\nFailed groups (marked inactive):\n" + "\n".join(failed_groups[:10])
+            report += f"\nFailed groups (marked inactive):\n" + "\n".join(self.md_escape(g) for g in failed_groups[:10])
             if len(failed_groups) > 10:
                 report += f"\n... and {len(failed_groups) - 10} more"
         
-        await update.message.reply_text(report)
+        await update.message.reply_text(report, parse_mode='Markdown')
     
     async def export_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Export bot data to JSON and CSV files"""
@@ -4259,9 +4285,9 @@ class QuizBot:
             )
             
             if update.callback_query:
-                await update.callback_query.edit_message_text(summary)
+                await update.callback_query.edit_message_text(summary, parse_mode='Markdown')
             else:
-                await update.message.reply_text(summary)
+                await update.message.reply_text(summary, parse_mode='Markdown')
                 
         except Exception as e:
             error_msg = f"❌ Error exporting data: {str(e)}"
@@ -4297,7 +4323,7 @@ class QuizBot:
         if sorted_groups:
             groups_text += "🏆 *Top 5 Active Groups:*\n"
             for i, group in enumerate(sorted_groups, 1):
-                groups_text += f"{i}. {group['title']} - {group.get('quizzes_received', 0)} auto + {group.get('manual_quizzes_received', 0)} manual quizzes\n"
+                groups_text += f"{i}. {self.md_escape(group['title'])} - {group.get('quizzes_received', 0)} auto + {group.get('manual_quizzes_received', 0)} manual quizzes\n"
         
         keyboard = [
             [InlineKeyboardButton("🔄 Refresh", callback_data="manage_groups")],
@@ -4417,6 +4443,8 @@ class QuizBot:
         for i, group in enumerate(real_groups, 1):
             chat_id = group['chat_id']
             group_title = group.get('title', f"Group {chat_id}")
+            safe_title = self.md_escape(group_title)
+            safe_link_title = self.md_escape_link_text(group_title)
             status = "🟢" if group.get('is_active', True) else "🔴"
             
             try:
@@ -4431,18 +4459,18 @@ class QuizBot:
                         expire_date=datetime.now() + timedelta(days=7)
                     )
                     invite_link = invite_link_obj.invite_link
-                    link_text = f"[Join {group_title}]({invite_link})"
+                    link_text = f"[Join {safe_link_title}]({invite_link})"
                 except Exception as link_error:
                     # If can't create link, try to export existing link
                     try:
                         invite_link = await context.bot.export_chat_invite_link(chat_id)
-                        link_text = f"[Join {group_title}]({invite_link})"
+                        link_text = f"[Join {safe_link_title}]({invite_link})"
                     except Exception as export_error:
                         link_text = "❌ No invite link (bot needs admin)"
                         invite_link = None
                 
                 # Add to detailed list
-                all_links_text += f"{i}. {status} *{group_title}*\n"
+                all_links_text += f"{i}. {status} *{safe_title}*\n"
                 all_links_text += f"   • ID: `{chat_id}`\n"
                 all_links_text += f"   • Link: {link_text}\n"
                 all_links_text += f"   • Auto Quizzes: {group.get('quizzes_received', 0)}\n"
@@ -4454,7 +4482,7 @@ class QuizBot:
                 all_links_text += "\n"
                 
                 # Add to summary text
-                groups_text += f"{i}. {status} *{group_title}*\n"
+                groups_text += f"{i}. {status} *{safe_title}*\n"
                 if invite_link:
                     groups_text += f"   🔗 {invite_link}\n"
                 groups_text += f"   📊 Auto: {group.get('quizzes_received', 0)} | Manual: {group.get('manual_quizzes_received', 0)}\n\n"
@@ -4462,11 +4490,11 @@ class QuizBot:
             except Exception as e:
                 # Group not accessible or bot removed
                 failed_groups.append(group_title)
-                all_links_text += f"{i}. 🔴 *{group_title}* (❌ Bot not in group)\n"
+                all_links_text += f"{i}. 🔴 *{safe_title}* (❌ Bot not in group)\n"
                 all_links_text += f"   • ID: `{chat_id}`\n"
                 all_links_text += f"   • Last active: {group.get('last_activity', 'Never')[:10]}\n\n"
                 
-                groups_text += f"{i}. 🔴 *{group_title}* (Bot removed)\n\n"
+                groups_text += f"{i}. 🔴 *{safe_title}* (Bot removed)\n\n"
                 
                 # Mark as inactive
                 group['is_active'] = False
@@ -4493,7 +4521,7 @@ class QuizBot:
         if failed_groups:
             summary_text += "❌ *Failed Groups (Bot not in group):*\n"
             for group in failed_groups[:5]:  # Show only first 5
-                summary_text += f"• {group}\n"
+                summary_text += f"• {self.md_escape(group)}\n"
             if len(failed_groups) > 5:
                 summary_text += f"... and {len(failed_groups) - 5} more\n"
             summary_text += "\n"
@@ -4513,7 +4541,7 @@ class QuizBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(summary_text, reply_markup=reply_markup)
+        await update.message.reply_text(summary_text, reply_markup=reply_markup, parse_mode='Markdown')
         
         # Check if detailed list is too long for Telegram
         if len(all_links_text) > 4000:
@@ -4555,7 +4583,7 @@ class QuizBot:
         if active_groups:
             groups_text += f"🟢 *Active Groups ({len(active_groups)})*\n"
             for i, group in enumerate(active_groups[:20], 1):  # Show only first 20
-                groups_text += f"{i}. {group.get('title', 'Unknown')} (ID: `{group['chat_id']}`)\n"
+                groups_text += f"{i}. {self.md_escape(group.get('title', 'Unknown'))} (ID: `{group['chat_id']}`)\n"
                 groups_text += f"   📊 Auto: {group.get('quizzes_received', 0)} | Manual: {group.get('manual_quizzes_received', 0)}\n"
             
             if len(active_groups) > 20:
@@ -4566,7 +4594,7 @@ class QuizBot:
         if inactive_groups:
             groups_text += f"🔴 *Inactive Groups ({len(inactive_groups)})*\n"
             for i, group in enumerate(inactive_groups[:10], 1):  # Show only first 10
-                groups_text += f"{i}. {group.get('title', 'Unknown')} (ID: `{group['chat_id']}`)\n"
+                groups_text += f"{i}. {self.md_escape(group.get('title', 'Unknown'))} (ID: `{group['chat_id']}`)\n"
             
             if len(inactive_groups) > 10:
                 groups_text += f"... and {len(inactive_groups) - 10} more\n"
@@ -4589,7 +4617,7 @@ class QuizBot:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(groups_text, reply_markup=reply_markup)
+        await update.message.reply_text(groups_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def export_group_links(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /grouplinks command - export group links in simple format"""
@@ -4619,6 +4647,7 @@ class QuizBot:
                 
             chat_id = group['chat_id']
             group_title = group.get('title', f"Group {chat_id}")
+            safe_title = self.md_escape(group_title)
             
             try:
                 # Try to create invite link
@@ -4633,12 +4662,12 @@ class QuizBot:
                     # Try to export existing link
                     invite_link = await context.bot.export_chat_invite_link(chat_id)
                 
-                links_text += f"• *{group_title}*\n{invite_link}\n\n"
+                links_text += f"• *{safe_title}*\n{invite_link}\n\n"
                 links_only += f"{invite_link}\n"
                 success_count += 1
                 
             except Exception as e:
-                links_text += f"• *{group_title}* - ❌ No link available\n\n"
+                links_text += f"• *{safe_title}* - ❌ No link available\n\n"
             
             await asyncio.sleep(0.1)
         
@@ -4653,7 +4682,7 @@ class QuizBot:
             f"💡 *Tip:* Use `/groups` for quick overview"
         )
         
-        await update.message.reply_text(summary)
+        await update.message.reply_text(summary, parse_mode='Markdown')
         
         # Send links text (might be long)
         if len(links_text) > 4000:
@@ -5658,7 +5687,7 @@ class QuizBot:
         
         stats_text = (
             f"📊 *Group Statistics*\n\n"
-            f"🏷️ *Name:* {group['title']}\n"
+            f"🏷️ *Name:* {self.md_escape(group['title'])}\n"
             f"🆔 *ID:* {group['chat_id']}\n"
             f"📅 *Added:* {datetime.fromisoformat(group['added_date']).strftime('%Y-%m-%d')}\n"
             f"📤 *Auto Quizzes Received:* {group.get('quizzes_received', 0)}\n"
