@@ -181,6 +181,12 @@ class QuizBot:
         # NEW: token -> (subjects tuple, folders tuple-or-None, subfolders tuple-or-None) for the
         # full multi-subject → multi-chapter → multi-sub-folder quiz selection
         self.subjmulti_full_ctx_tokens = {}
+        # NEW: "chat_id:message_id" -> quiz _id (string), so a poll can be traced back to its
+        # exact DB document (used by /qreport + admin edit/replace). In-memory only —
+        # resets on restart, same trade-off as the other token caches above.
+        self.poll_quiz_map = {}
+        # NEW: token -> (quiz_id, report_id) for the admin "Edit / Replace Quiz" flow
+        self.edit_ctx_tokens = {}
     
     # ==========================================================
     # NEW: HIERARCHICAL QUIZ HELPERS (Subject → Folder → Questions)
@@ -333,6 +339,17 @@ class QuizBot:
         """NEW: Resolve a full multi-subject/chapter/sub-folder ctx token back to
         (subjects tuple, folders tuple-or-None, subfolders tuple-or-None)."""
         return self.subjmulti_full_ctx_tokens.get(token)
+
+    def register_edit_ctx(self, quiz_id, report_id):
+        """NEW: Register and return a short token for a (quiz_id, report_id) pair,
+        used by the admin "Edit / Replace Quiz" flow."""
+        token = self.make_token(f"editctx::{quiz_id}::{report_id}")
+        self.edit_ctx_tokens[token] = (quiz_id, report_id)
+        return token
+
+    def resolve_edit_ctx(self, token):
+        """NEW: Resolve an edit-ctx token back to (quiz_id, report_id)."""
+        return self.edit_ctx_tokens.get(token)
 
     def get_union_folders(self, subjects):
         """NEW: {folder_name: total_count} across ALL of the given subjects."""
@@ -1287,7 +1304,8 @@ class QuizBot:
         if context.user_data.get('await') in (
                 'quiz_custom_count', 'quiz_custom_timer',
                 'quiz_multi_custom_count', 'quiz_multi_custom_timer',
-                'quiz_subjmulti_custom_count', 'quiz_subjmulti_custom_timer'):
+                'quiz_subjmulti_custom_count', 'quiz_subjmulti_custom_timer',
+                'quiz_subjmulti_full_custom_count', 'quiz_subjmulti_full_custom_timer'):
             await self.handle_quiz_custom_input(update, context)
             return
         
@@ -1310,8 +1328,17 @@ class QuizBot:
             await self.handle_interval_input(update, context)
             return
         
+        # NEW: admin is sending the new question text for "Edit Question Text Only"
+        if context.user_data.get('await') == 'edit_quiz_question':
+            await self.handle_edit_quiz_question_input(update, context)
+            return
+        
         # NEW: handle incoming polls with the hierarchical flow
         if update.message.poll:
+            # NEW: admin is sending a replacement poll for "Replace Entire Quiz"
+            if context.user_data.get('quiz_edit_replace_pending'):
+                await self.handle_edit_quiz_replace_poll(update, context, update.message.poll)
+                return
             add_state = context.user_data.get('add_state') or {}
             if add_state.get('subject') and add_state.get('folder'):
                 # Quiz-saving mode active → save under the selected subject/folder(/sub-folder)
@@ -1489,6 +1516,9 @@ class QuizBot:
         group['quizzes_received'] = group.get('quizzes_received', 0) + 1
         group['last_activity'] = datetime.now().isoformat()
         self.save_group(group)
+        
+        # NEW: remember which DB quiz this poll came from, so /qreport can find it precisely
+        self.poll_quiz_map[f"{group['chat_id']}:{message.message_id}"] = str(quiz['_id'])
         
         # Track engagement
         if str(group['chat_id']) not in self.stats['group_engagement']:
@@ -1957,6 +1987,7 @@ class QuizBot:
         
         label = f"{folder} → 📂 {subfolder}" if subfolder else folder
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
+        session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
         intro = (
             f"▶️ Starting Quiz!\n\n"
             f"📚 {subject}\n📁 {label}\n"
@@ -1989,6 +2020,7 @@ class QuizBot:
             return
         
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
+        session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
         intro = (
             f"▶️ Starting Quiz!\n\n"
             f"📚 {subject}\n📁 {label}\n"
@@ -2029,6 +2061,7 @@ class QuizBot:
             sf_label = ", ".join(subfolders) if len(subfolders) <= 3 else f"{len(subfolders)} sub-folders selected"
             extra_lines += f"📂 Sub-folders: {sf_label}\n"
         timer_label = "1 min" if secs == 60 else f"{secs} sec"
+        session['chat_id'] = chat_id  # NEW: remember WHERE this quiz is running (group or DM)
         intro = (
             f"▶️ Starting Quiz!\n\n"
             f"📚 Subjects: {label}\n"
@@ -2067,7 +2100,9 @@ class QuizBot:
         # NEW: mark this poll as handled so a pending timeout task (if any) skips it
         session['last_poll_id'] = None
         
-        chat_id = pa.user.id
+        # NEW: always reply in the chat the quiz is actually running in (group or DM) —
+        # NOT pa.user.id, which would silently reroute a group quiz into the answerer's own DM.
+        chat_id = session.get('chat_id', pa.user.id)
         
         # Quick feedback, then the next question follows automatically
         if is_correct:
@@ -2124,13 +2159,8 @@ class QuizBot:
         return text
     
     async def stop_quiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """NEW: Handle /stop — end the running quiz session and show the result"""
-        if update.effective_chat.type != 'private':
-            await update.message.reply_text(
-                "❌ /stop works only in the bot's private chat!\n"
-                "Open my DM and send /stop there to end your quiz.")
-            return
-        
+        """NEW: Handle /stop — end the running quiz session and show the result.
+        Works in private chat AND in a group (for whoever started that quiz there)."""
         session = context.user_data.get('quiz_session')
         if not session or session.get('completed'):
             await update.message.reply_text(
@@ -2236,6 +2266,9 @@ class QuizBot:
         session['last_poll_id'] = message.poll.id
         session['last_correct_option_id'] = quiz['correct_option_id']
         session['last_options'] = quiz['options']
+        
+        # NEW: remember which DB quiz this poll came from, so /qreport can find it precisely
+        self.poll_quiz_map[f"{chat_id}:{message.message_id}"] = str(quiz['_id'])
         
         # NEW: if there's a timer, auto-advance when it runs out and the user didn't answer
         if timer_seconds > 0:
@@ -2568,15 +2601,12 @@ class QuizBot:
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def report_quiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /qreport command - report a quiz for review"""
+        """Handle /qreport command - report a quiz for review.
+        Works in groups AND in the bot's private chat (e.g. while playing a /quiz session)."""
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
         message_id = update.effective_message.message_id
-        
-        # Check if it's a group chat
-        if update.effective_chat.type not in ['group', 'supergroup']:
-            await update.message.reply_text("❌ This command can only be used in groups!")
-            return
+        is_private = update.effective_chat.type == 'private'
         
         # Check if the message is a reply to a quiz
         if not update.message.reply_to_message or not update.message.reply_to_message.poll:
@@ -2597,10 +2627,17 @@ class QuizBot:
             await update.message.reply_text("❌ This is not a quiz! Only quiz polls can be reported.")
             return
         
+        replied_message_id = update.message.reply_to_message.message_id
+        
+        # NEW: try to trace this poll back to its exact DB document (works for both
+        # group broadcasts and private /quiz sessions — falls back gracefully if not found,
+        # e.g. after a bot restart)
+        quiz_id = self.poll_quiz_map.get(f"{chat_id}:{replied_message_id}")
+        
         # Extract quiz information
         quiz_info = {
             'chat_id': chat_id,
-            'message_id': update.message.reply_to_message.message_id,
+            'message_id': replied_message_id,
             'question': replied_poll.question,
             'options': [option.text for option in replied_poll.options],
             'correct_option_id': replied_poll.correct_option_id,
@@ -2610,8 +2647,11 @@ class QuizBot:
                 'first_name': update.effective_user.first_name,
             },
             'report_time': datetime.now().isoformat(),
-            'group_name': update.effective_chat.title,
-            'original_message_link': f"https://t.me/c/{str(chat_id)[4:]}/{update.message.reply_to_message.message_id}"
+            'group_name': "🔒 Private Chat (DM)" if is_private else update.effective_chat.title,
+            # NEW: message links only make sense for groups; DM messages aren't linkable
+            'original_message_link': (
+                None if is_private else f"https://t.me/c/{str(chat_id)[4:]}/{replied_message_id}"),
+            'quiz_id': quiz_id,   # NEW: precise DB link for admin edit/delete, may be None
         }
         
         # Generate a unique report ID
@@ -2628,18 +2668,20 @@ class QuizBot:
         self.stats['quiz_reports_received'] = self.stats.get('quiz_reports_received', 0) + 1
         self.save_stats()
         
-        # Send confirmation to the user (with self-destruct notice)
+        # Send confirmation to the user (with self-destruct notice, groups only —
+        # keep the confirmation visible in DM so it doesn't feel like it vanished)
         try:
             confirmation_msg = await update.message.reply_text(
                 f"✅ **Quiz Reported Successfully!**\n\n"
                 f"📝 **Question:** {replied_poll.question[:100]}...\n\n"
                 f"The quiz has been forwarded to the admin for review.\n"
-                f"Thank you for helping improve the quiz quality!\n\n"
-                f"⏰ _This confirmation will self-destruct in 10 seconds..._"
+                f"Thank you for helping improve the quiz quality!" +
+                ("\n\n⏰ _This confirmation will self-destruct in 10 seconds..._" if not is_private else "")
             )
             
-            # Delete the confirmation after 10 seconds to avoid message clutter
-            asyncio.create_task(self.delete_message_after_delay(chat_id, confirmation_msg.message_id, 10))
+            if not is_private:
+                # Delete the confirmation after 10 seconds to avoid message clutter
+                asyncio.create_task(self.delete_message_after_delay(chat_id, confirmation_msg.message_id, 10))
         except Exception as e:
             print(f"⚠️ Could not send confirmation message (might be deleted): {e}")
             # Continue anyway - the report is already saved
@@ -2712,6 +2754,8 @@ class QuizBot:
         }.get(report.get('status'), 'Unknown')
         
         # Use HTML formatting to avoid Markdown parsing errors
+        link_line = (f"• 🔗 Message: <a href='{report['original_message_link']}'>View Original</a>\n"
+                     if report.get('original_message_link') else "")
         report_text = (
             f"📋 <b>Report Details</b>\n\n"
             f"📝 <b>Question:</b> {report['question']}\n\n"
@@ -2722,7 +2766,7 @@ class QuizBot:
             f"• 👥 Group: {report['group_name']}\n"
             f"• 🕐 Time: {datetime.fromisoformat(report['report_time']).strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"• 📊 Status: {status_emoji} {status_text}\n"
-            f"• 🔗 Message: <a href='{report['original_message_link']}'>View Original</a>\n"
+            f"{link_line}"
             f"• 🆔 Report ID: <code>{report['_id']}</code>\n\n"
         )
         
@@ -2736,6 +2780,9 @@ class QuizBot:
         # Create action buttons based on status
         if report.get('status') == 'pending':
             keyboard = [
+                [
+                    InlineKeyboardButton("✏️ Edit / Replace Quiz", callback_data=f"edit_quiz_{report['_id']}")
+                ],
                 [
                     InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report['_id']}"),
                     InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report['_id']}")
@@ -2781,6 +2828,8 @@ class QuizBot:
         username_display = f" (@{username})" if username else ""
         
         # Use HTML formatting instead of Markdown to avoid parsing errors
+        link_line = (f"• 🔗 Message: <a href='{quiz_info['original_message_link']}'>View Original</a>\n"
+                     if quiz_info.get('original_message_link') else "")
         report_text = (
             f"⚠️ <b>QUIZ REPORTED FOR REVIEW</b>\n\n"
             f"📝 <b>Question:</b> {quiz_info['question']}\n\n"
@@ -2790,13 +2839,16 @@ class QuizBot:
             f"• 👤 Reported by: {quiz_info['reported_by']['first_name']}{username_display}\n"
             f"• 👥 Group: {quiz_info['group_name']}\n"
             f"• 🕐 Time: {datetime.fromisoformat(quiz_info['report_time']).strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"• 🔗 Message: <a href='{quiz_info['original_message_link']}'>View Original</a>\n"
+            f"{link_line}"
             f"• 🆔 Report ID: <code>{report_id}</code>\n\n"
             f"<b>What would you like to do with this quiz?</b>"
         )
         
         # Create action buttons
         keyboard = [
+            [
+                InlineKeyboardButton("✏️ Edit / Replace Quiz", callback_data=f"edit_quiz_{report_id}")
+            ],
             [
                 InlineKeyboardButton("🗑️ Delete Quiz", callback_data=f"delete_quiz_{report_id}"),
                 InlineKeyboardButton("👁️ Ignore Report", callback_data=f"ignore_report_{report_id}")
@@ -3048,6 +3100,221 @@ class QuizBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(response_text, reply_markup=reply_markup)
     
+    async def handle_edit_quiz_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, report_id: str):
+        """NEW: Entry point for '✏️ Edit / Replace Quiz' on a report — locates the exact
+        DB quiz doc (via the report's saved quiz_id, or falls back to an exact question
+        match, same rule the Delete flow uses) and shows edit options."""
+        query = update.callback_query
+        await query.answer()
+        
+        report = self.mongo.find_one('quiz_reports', {'_id': report_id})
+        if not report:
+            await query.edit_message_text("❌ Report not found or already processed.")
+            return
+        
+        candidates = []
+        quiz_id = report.get('quiz_id')
+        if quiz_id:
+            quiz = self.get_quiz_by_id(quiz_id)
+            if quiz:
+                candidates = [quiz]
+        if not candidates:
+            # Fallback: exact question match (case-insensitive) — same rule Delete uses
+            all_quizzes = self.mongo.find('quizzes', {})
+            candidates = [q for q in all_quizzes if q['question'].lower() == report['question'].lower()]
+        
+        if not candidates:
+            await query.edit_message_text(
+                "❌ Couldn't locate the original quiz in the database.\n"
+                "It may have already been deleted or edited.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")]
+                ]))
+            return
+        
+        if len(candidates) == 1:
+            await self.show_edit_quiz_options(query, candidates[0], report_id)
+            return
+        
+        # Multiple exact-question matches — let the admin pick which one to edit
+        text = f"⚠️ Found {len(candidates)} quizzes with this exact question. Which one do you want to edit?\n\n"
+        keyboard = []
+        for i, quiz in enumerate(candidates[:10], 1):
+            token = self.register_edit_ctx(str(quiz['_id']), report_id)
+            folder_bit = f" → {quiz.get('folder')}" if quiz.get('folder') else ""
+            label = f"{i}. {quiz.get('subject', '?')}{folder_bit}"
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"editq_pick_{token}")])
+        if len(candidates) > 10:
+            text += f"(Showing first 10 of {len(candidates)})\n\n"
+        keyboard.append([InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")])
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    async def show_edit_quiz_options(self, query, quiz, report_id):
+        """NEW: Show the actual edit choices for one specific quiz doc."""
+        token = self.register_edit_ctx(str(quiz['_id']), report_id)
+        options_text = "\n".join([f"• {o}" for o in quiz['options']])
+        correct = quiz['options'][quiz['correct_option_id']]
+        location = f"📚 {quiz.get('subject', '?')} → 📁 {quiz.get('folder', '?')}"
+        if quiz.get('subfolder'):
+            location += f" → 📂 {quiz['subfolder']}"
+        text = (
+            f"✏️ <b>Edit Quiz</b>\n\n"
+            f"{location}\n\n"
+            f"📝 <b>Question:</b> {quiz['question']}\n\n"
+            f"📋 <b>Options:</b>\n{options_text}\n\n"
+            f"✅ <b>Correct:</b> {correct}\n\n"
+            f"Choose what you want to change:"
+        )
+        keyboard = [
+            [InlineKeyboardButton("📝 Edit Question Text Only", callback_data=f"editq_text_{token}")],
+            [InlineKeyboardButton("🔁 Replace Entire Quiz (send new poll)", callback_data=f"editq_poll_{token}")],
+            [InlineKeyboardButton("🔙 Back to Report", callback_data=f"report_back_{report_id}")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    
+    async def handle_editq_pick(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token: str):
+        """NEW: Admin picked one specific quiz from the multi-match list."""
+        query = update.callback_query
+        await query.answer()
+        pair = self.resolve_edit_ctx(token)
+        if not pair:
+            await query.edit_message_text("⚠️ This session expired — please open the report again.")
+            return
+        quiz_id, report_id = pair
+        quiz = self.get_quiz_by_id(quiz_id)
+        if not quiz:
+            await query.edit_message_text("❌ Quiz not found (may have been deleted).")
+            return
+        await self.show_edit_quiz_options(query, quiz, report_id)
+    
+    async def handle_editq_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token: str):
+        """NEW: Admin chose to edit ONLY the question text — ask for the new text."""
+        query = update.callback_query
+        await query.answer()
+        pair = self.resolve_edit_ctx(token)
+        if not pair:
+            await query.edit_message_text("⚠️ This session expired — please open the report again.")
+            return
+        quiz_id, report_id = pair
+        context.user_data['await'] = 'edit_quiz_question'
+        context.user_data['edit_quiz_ctx'] = {'quiz_id': quiz_id, 'report_id': report_id}
+        await query.edit_message_text(
+            "✏️ Send the NEW question text now.\n\n"
+            "(Options and the correct answer stay the same. If you need to change those too, "
+            "use 🔁 Replace Entire Quiz instead.)"
+        )
+    
+    async def handle_editq_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token: str):
+        """NEW: Admin chose to replace the entire quiz — ask for a new Quiz Mode poll."""
+        query = update.callback_query
+        await query.answer()
+        pair = self.resolve_edit_ctx(token)
+        if not pair:
+            await query.edit_message_text("⚠️ This session expired — please open the report again.")
+            return
+        quiz_id, report_id = pair
+        context.user_data['quiz_edit_replace_pending'] = {'quiz_id': quiz_id, 'report_id': report_id}
+        await query.edit_message_text(
+            "🔁 Send the NEW Quiz Mode poll now — it will completely replace the question, "
+            "options, and correct answer of the reported quiz.\n"
+            "(Subject/folder location stays the same.)\n\n"
+            "💡 How to create a Quiz Mode poll:\n"
+            "1. Tap the 📎 attachment icon → Poll\n"
+            "2. Enter your question and options\n"
+            "3. ✅ Enable 'Quiz Mode' and set the correct answer\n"
+            "4. Send it to me"
+        )
+    
+    async def handle_edit_quiz_question_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """NEW: Handle the admin's text reply for 'Edit Question Text Only'."""
+        ctx = context.user_data.get('edit_quiz_ctx') or {}
+        quiz_id = ctx.get('quiz_id')
+        report_id = ctx.get('report_id')
+        context.user_data['await'] = None
+        context.user_data['edit_quiz_ctx'] = None
+        
+        new_question = (update.message.text or '').strip()
+        if not new_question:
+            await update.message.reply_text("❌ Please send a valid, non-empty question.")
+            return
+        if not quiz_id:
+            await update.message.reply_text("⚠️ Edit session expired. Please open the report again.")
+            return
+        
+        quiz = self.get_quiz_by_id(quiz_id)
+        if not quiz:
+            await update.message.reply_text("❌ Quiz not found (may have been deleted). Nothing was changed.")
+            return
+        
+        self.mongo.update_one('quizzes', {'_id': quiz['_id']}, {'$set': {'question': new_question}})
+        self.quizzes = self.load_quizzes()
+        
+        if report_id:
+            self.mongo.update_one('quiz_reports', {'_id': report_id}, {'$set': {
+                'status': 'reviewed',
+                'action_taken': 'question_edited',
+                'action_time': datetime.now().isoformat()
+            }})
+        
+        await update.message.reply_text(
+            f"✅ **Question Updated!**\n\n"
+            f"📝 New question: {new_question}\n\n"
+            f"The quiz has been updated in place — everything else is unchanged.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]])
+        )
+    
+    async def handle_edit_quiz_replace_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE, poll):
+        """NEW: Handle the admin's new Quiz Mode poll for 'Replace Entire Quiz'."""
+        pending = context.user_data.get('quiz_edit_replace_pending') or {}
+        quiz_id = pending.get('quiz_id')
+        report_id = pending.get('report_id')
+        context.user_data['quiz_edit_replace_pending'] = None
+        
+        if poll.correct_option_id is None:
+            await update.message.reply_text(
+                "❌ This is a regular poll, not a quiz!\n\n"
+                "I need a QUIZ MODE poll (with a correct answer set) to replace it.\n"
+                "Please create a new poll with Quiz Mode enabled and send it again."
+            )
+            context.user_data['quiz_edit_replace_pending'] = pending  # let the admin retry
+            return
+        
+        if not quiz_id:
+            await update.message.reply_text("⚠️ Edit session expired. Please open the report again.")
+            return
+        
+        quiz = self.get_quiz_by_id(quiz_id)
+        if not quiz:
+            await update.message.reply_text("❌ Quiz not found (may have been deleted). Nothing was changed.")
+            return
+        
+        self.mongo.update_one('quizzes', {'_id': quiz['_id']}, {'$set': {
+            'question': poll.question,
+            'options': [option.text for option in poll.options],
+            'correct_option_id': poll.correct_option_id,
+        }})
+        self.quizzes = self.load_quizzes()
+        
+        if report_id:
+            self.mongo.update_one('quiz_reports', {'_id': report_id}, {'$set': {
+                'status': 'reviewed',
+                'action_taken': 'quiz_replaced',
+                'action_time': datetime.now().isoformat()
+            }})
+        
+        correct_answer = poll.options[poll.correct_option_id].text
+        location = f"📚 {quiz.get('subject', '?')} → 📁 {quiz.get('folder', '?')}"
+        if quiz.get('subfolder'):
+            location += f" → 📂 {quiz['subfolder']}"
+        await update.message.reply_text(
+            f"✅ **Quiz Replaced!**\n\n"
+            f"{location}\n\n"
+            f"📝 New Question: {poll.question}\n"
+            f"✅ New Correct Answer: {correct_answer}\n\n"
+            f"The old question/options/answer have been replaced in place.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="close_report")]])
+        )
+    
     async def handle_view_reports(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """View all pending quiz reports"""
         query = update.callback_query
@@ -3078,12 +3345,14 @@ class QuizBot:
             keyboard = []
             for i, report in enumerate(pending_reports[:5], 1):  # Show only first 5
                 report_time = datetime.fromisoformat(report['report_time']).strftime('%m/%d %H:%M')
+                link_bit = (f"[View Original]({report['original_message_link']})\n"
+                            if report.get('original_message_link') else "🔒 Private chat report\n")
                 response_text += (
                     f"{i}. **{report['question'][:60]}...**\n"
                     f"   👤 {report['reported_by']['first_name']} | "
                     f"👥 {report['group_name']}\n"
                     f"   🕐 {report_time} | "
-                    f"[View Original]({report['original_message_link']})\n"
+                    f"{link_bit}"
                     f"   ID: `{report['_id']}`\n\n"
                 )
                 
@@ -4298,6 +4567,19 @@ class QuizBot:
         elif data.startswith("view_similar_"):
             report_id = data[13:]  # Remove "view_similar_" prefix
             await self.handle_view_similar(update, context, report_id)
+        # NEW: Edit / Replace a reported quiz
+        elif data.startswith("edit_quiz_"):
+            report_id = data[len("edit_quiz_"):]
+            await self.handle_edit_quiz_menu(update, context, report_id)
+        elif data.startswith("editq_pick_"):
+            token = data[len("editq_pick_"):]
+            await self.handle_editq_pick(update, context, token)
+        elif data.startswith("editq_text_"):
+            token = data[len("editq_text_"):]
+            await self.handle_editq_text(update, context, token)
+        elif data.startswith("editq_poll_"):
+            token = data[len("editq_poll_"):]
+            await self.handle_editq_poll(update, context, token)
         elif data == "view_reports":
             await self.handle_view_reports(update, context)
         elif data == "clear_resolved_reports":
