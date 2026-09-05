@@ -5,6 +5,7 @@ import asyncio
 import csv
 import threading
 import re
+import string
 import hashlib
 import requests
 import html as html_lib
@@ -140,6 +141,145 @@ def reset_and_set_commands(extra_admin_ids=None):
 
 # Global bot instance
 bot_instance = None
+
+# NEW: .txt → quiz bulk-import support (ported from the txt-quiz bot).
+# Expected block format (blocks separated by a blank line):
+#   Question text
+#   A) option 1
+#   B) option 2
+#   C) option 3
+#   D) option 4
+#   Answer: B
+#   Optional one-line explanation
+def preprocess_content(content: str) -> str:
+    """Preprocess raw .txt content to handle various text formats before parsing."""
+    # Normalize line endings
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+
+    # Handle numbered questions (1., 2., etc.)
+    content = re.sub(r'^\d+\.\s*', '', content, flags=re.MULTILINE)
+
+    # Handle bullet points
+    content = re.sub(r'^[•\-*]\s*', '', content, flags=re.MULTILINE)
+
+    # Remove extra blank lines but keep question separators
+    content = re.sub(r'\n\s*\n', '\n\n', content)
+
+    # Trim whitespace from each line
+    lines = [line.strip() for line in content.split('\n')]
+
+    # Remove empty lines at start and end
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    return '\n'.join(lines)
+
+
+def parse_quiz_file(content: str) -> tuple:
+    """Robust quiz parser that handles different text formats.
+    Returns (valid_questions, errors) where valid_questions is a list of
+    (question, options, correct_option_index, explanation) tuples."""
+    # Normalize line endings and clean up content
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+    content = re.sub(r'\n\s*\n', '\n\n', content)  # Normalize multiple blank lines
+    content = content.strip()
+
+    blocks = content.split('\n\n')
+    valid_questions = []
+    errors = []
+
+    for i, block in enumerate(blocks, 1):
+        if not block.strip():
+            continue
+
+        lines = [line.strip() for line in block.split('\n') if line.strip()]
+
+        # Flexible validation - allow 2 to 4 options per question
+        # min: question + 2 options + answer = 4 lines
+        # max: question + 4 options + answer + explanation = 7 lines
+        if len(lines) < 4:
+            errors.append(f"❌ Question {i}: Too few lines ({len(lines)}), need at least 4")
+            continue
+
+        if len(lines) > 7:
+            errors.append(f"❌ Question {i}: Too many lines ({len(lines)}), maximum 7 allowed")
+            continue
+
+        # Extract components with flexible parsing
+        question = lines[0]
+
+        # Find options (all non-empty lines until the answer line)
+        options = []
+        option_lines = []
+
+        for line in lines[1:]:
+            # Stop if we find an answer line
+            if line.lower().startswith('answer:'):
+                break
+            option_lines.append(line)
+
+        # Support 2, 3, or 4 options
+        if 2 <= len(option_lines) <= 4:
+            options = option_lines
+        else:
+            errors.append(f"❌ Q{i}: Need 2 to 4 options, found {len(option_lines)}")
+            continue
+
+        # Find answer line
+        answer_line = None
+        explanation = None
+
+        for j, line in enumerate(lines):
+            if line.lower().startswith('answer:'):
+                answer_line = line
+                # Check if there's an explanation after the answer
+                if j + 1 < len(lines):
+                    explanation = lines[j + 1]
+                break
+
+        if not answer_line:
+            errors.append(f"❌ Q{i}: Missing 'Answer:' line")
+            continue
+
+        # Parse answer number
+        num_options = len(options)
+        valid_letters = string.ascii_uppercase[:num_options]  # e.g. "AB", "ABC", "ABCD"
+        try:
+            answer_text = answer_line.split(':', 1)[1].strip()
+            # Handle various answer formats: "1", "A", "a", "B)", etc.
+            if answer_text.isdigit():
+                answer_num = int(answer_text)
+            else:
+                # Handle letter answers: A=1, B=2, C=3, D=4 (up to number of options)
+                answer_char = answer_text.upper()[0]
+                if answer_char in valid_letters:
+                    answer_num = ord(answer_char) - ord('A') + 1
+                else:
+                    raise ValueError(f"Invalid answer format: {answer_text}")
+
+            if not 1 <= answer_num <= num_options:
+                errors.append(f"❌ Q{i}: Invalid answer number {answer_num} (only {num_options} options)")
+                continue
+
+        except (ValueError, IndexError, TypeError) as e:
+            errors.append(f"❌ Q{i}: Malformed answer line - {str(e)}")
+            continue
+
+        # Validate that explanation doesn't look like another question
+        if explanation and len(explanation.split()) > 10:
+            # If explanation is too long, it might be the next question
+            explanation = None
+
+        valid_questions.append((question, options, answer_num - 1, explanation))
+
+    return valid_questions, errors
+
+
+# Strip a leading "A)", "B.", "c-", etc. from an option line before saving/display
+_OPT_PREFIX_RE = re.compile(r'^[A-Da-d][\.\):\-\s]+')
+
 
 class MongoDB:
     def __init__(self, uri):
@@ -1552,12 +1692,21 @@ class QuizBot:
         await update.message.reply_text(
             "❓ I didn't understand that.\n\n"
             "📝 To add quizzes: /start → 📝 Add Quiz → select Subject → Quiz Folder, "
-            "then send Quiz Mode polls. Finish with /done.\n\n"
+            "then send Quiz Mode polls (or a formatted .txt file). Finish with /done.\n\n"
             "💡 How to create a Quiz Mode poll:\n"
             "1. Tap the 📎 attachment icon → Poll\n"
             "2. Enter your question and options\n"
             "3. ✅ Enable 'Quiz Mode' and set the correct answer\n"
-            "4. Send it to me"
+            "4. Send it to me\n\n"
+            "📄 Or send a .txt file with one or more questions, each block "
+            "separated by a blank line:\n"
+            "What is 2+2?\n"
+            "A) 3\n"
+            "B) 4\n"
+            "C) 5\n"
+            "D) 6\n"
+            "Answer: B\n"
+            "2 + 2 equals 4 (optional explanation)"
         )
     
     async def save_poll_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE, poll, subject, folder, subfolder=''):
@@ -1626,6 +1775,116 @@ class QuizBot:
             f"⚠️ Users can report quizzes with /qreport command"
         )
     
+    async def handle_quiz_txt_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """NEW: Bulk-add quizzes from an uploaded .txt file while in Add-Quiz mode.
+        Same subject/folder(/sub-folder) target as the poll-by-poll flow — just
+        parses a formatted .txt file (question / options / Answer: X / optional
+        explanation, blocks separated by a blank line) and saves every valid
+        question in one go instead of requiring one poll per question."""
+        user_id = update.effective_user.id
+
+        if not self.is_admin(user_id):
+            await update.message.reply_text("I only accept commands from the admin.")
+            return
+
+        add_state = context.user_data.get('add_state') or {}
+        subject = add_state.get('subject')
+        folder = add_state.get('folder')
+        subfolder = add_state.get('subfolder', '')
+
+        if not (subject and folder):
+            await update.message.reply_text(
+                "⚠️ Please select where to save the quiz first!\n\n"
+                "Tap 📝 Add Quiz below (or /start → 📝 Add Quiz), then choose:\n"
+                "Subject → Quiz Folder\n\n"
+                "After that, you can send a formatted .txt file (or Quiz Mode polls) "
+                "and every question will be saved under your selection.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Add Quiz", callback_data="add_quiz", style='success')]])
+            )
+            return
+
+        document = update.message.document
+        if not document.file_name.lower().endswith('.txt'):
+            await update.message.reply_text("❌ Please send a .txt file (or a Quiz Mode poll).")
+            return
+
+        try:
+            file = await context.bot.get_file(document.file_id)
+            raw = await file.download_as_bytearray()
+            content = raw.decode('utf-8')
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Could not read the file: {e}")
+            return
+
+        processed_content = preprocess_content(content)
+        valid_questions, errors = parse_quiz_file(processed_content)
+
+        if errors:
+            error_msg = "\n".join(errors[:5])
+            if len(errors) > 5:
+                error_msg += f"\n\n...and {len(errors) - 5} more errors"
+            await update.message.reply_text(f"⚠️ Found {len(errors)} error(s):\n\n{error_msg}")
+
+        if not valid_questions:
+            await update.message.reply_text("❌ No valid questions found in file")
+            return
+
+        status_msg = await update.message.reply_text(
+            f"⏳ Saving {len(valid_questions)} question(s)..."
+        )
+
+        saved_count = 0
+        for question, options, correct_id, explanation in valid_questions:
+            clean_options = [_OPT_PREFIX_RE.sub('', opt).strip() for opt in options]
+            quiz = {
+                'type': 'quiz',
+                'subject': subject,
+                'folder': folder,
+                'subfolder': subfolder or '',
+                'question': question,
+                'options': clean_options,
+                'is_anonymous': False,
+                'allows_multiple_answers': False,
+                'correct_option_id': correct_id,
+                'added_date': datetime.now().isoformat(),
+                'sent_count': 0,
+                'manual_sent_count': 0,
+                'last_sent': None,
+                'engagement': 0,
+                'is_active': True
+            }
+            if explanation:
+                quiz['explanation'] = explanation
+
+            try:
+                self.mongo.insert_one('quizzes', quiz)
+                saved_count += 1
+            except Exception as e:
+                print(f"⚠️ Failed to save question from .txt import: {e}")
+
+        self.stats['quizzes_added'] = self.stats.get('quizzes_added', 0) + saved_count
+        self.save_stats()
+
+        # Reload quizzes from MongoDB
+        self.quizzes = self.load_quizzes()
+
+        # Track how many were saved in this adding session
+        add_state['saved_count'] = add_state.get('saved_count', 0) + saved_count
+        context.user_data['add_state'] = add_state
+
+        folder_count = self.mongo.count_documents('quizzes', {'subject': subject, 'folder': folder})
+        folder_label = f"{folder} → 📂 {subfolder}" if subfolder else folder
+
+        await status_msg.edit_text(
+            f"✅ Imported {saved_count}/{len(valid_questions)} question(s) from file!\n\n"
+            f"📚 Subject: {subject}\n"
+            f"📁 Quiz Folder: {folder_label}\n\n"
+            f"📊 Saved this session: {add_state['saved_count']}\n"
+            f"📁 Questions in this folder (total): {folder_count}\n"
+            f"📊 Total quizzes: {len(self.quizzes)}\n\n"
+            f"➡️ Send more polls/.txt files, or send /done to finish."
+        )
+
     async def send_random_quiz(self):
         """Send a random quiz poll to all groups (from ALL subjects and folders)"""
         if not self.quizzes or not self.groups:
@@ -5892,6 +6151,12 @@ class QuizBot:
             self.handle_private_message
         ))
         
+        # NEW: bulk-add quizzes from a formatted .txt file (admin, private chat only)
+        self.application.add_handler(MessageHandler(
+            filters.ChatType.PRIVATE & filters.Document.TEXT,
+            self.handle_quiz_txt_upload
+        ))
+        
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         
         # Add error handler
@@ -5958,6 +6223,7 @@ class QuizBot:
         print(f"🗂 NEW: Hierarchical quiz storage (Subject → Quiz Folder → Questions)")
         print(f"🗂 NEW: 'Manage Quiz Folders' in dashboard (view/create/rename/delete)")
         print(f"📝 NEW: Admin quiz-saving flow: Subject → Folder → send polls → /done")
+        print(f"📄 NEW: Admin can also bulk-import quizzes from a formatted .txt file")
         print(f"🎮 NEW: /quiz command for all users (private chat) with per-user sessions")
         print(f"⚡ NEW: Auto-next — the next question is sent automatically after each answer")
         print(f"🛑 NEW: /stop command ends a running quiz and shows the result with score")
