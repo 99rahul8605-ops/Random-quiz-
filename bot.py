@@ -104,6 +104,7 @@ def reset_and_set_commands(extra_admin_ids=None):
         {"command": "start", "description": "🚀 Launch the bot"},
         {"command": "quiz", "description": "🎮 Browse & play a quiz"},
         {"command": "stop", "description": "🛑 Stop your running quiz"},
+        {"command": "quizmode", "description": "🔐 Toggle silent Quiz Mode (group admins)"},
         {"command": "qreport", "description": "⚠️ Report a wrong quiz"},
     ]
     _post({"commands": commands, "scope": {"type": "all_private_chats"}}, "public/all_private_chats")
@@ -115,6 +116,7 @@ def reset_and_set_commands(extra_admin_ids=None):
         {"command": "start", "description": "👋 Open Admin Dashboard"},
         {"command": "quiz", "description": "🎮 Browse & play a quiz"},
         {"command": "stop", "description": "🛑 Stop your running quiz"},
+        {"command": "quizmode", "description": "🔐 Toggle silent Quiz Mode (group admins)"},
         {"command": "stats", "description": "📊 View bot statistics"},
         {"command": "settings", "description": "⚙️ Configure bot settings"},
         {"command": "broadcast", "description": "📢 Broadcast to all groups"},
@@ -450,6 +452,33 @@ class QuizBot:
         # can be shown in the final leaderboard. In-memory only, resets on restart.
         self.group_sessions = {}       # chat_id (negative) -> session dict
         self.poll_id_to_chat = {}      # poll_id -> chat_id, for group quizzes only
+        # NEW: /quizmode — groups where non-quiz messages are silently deleted
+        # while a quiz session is actively running in that group.
+        self.quiz_mode_groups = self.load_quiz_mode_groups()
+    
+    # NEW: /quizmode persistence (separate 'group_settings' collection so it
+    # doesn't interfere with the 'groups' broadcast-list documents)
+    def load_quiz_mode_groups(self):
+        """Load the set of chat_ids that have Quiz Mode enabled."""
+        try:
+            docs = self.mongo.find('group_settings', {'quiz_mode': True})
+            return {doc['chat_id'] for doc in docs}
+        except Exception as e:
+            print(f"⚠️ load_quiz_mode_groups error: {e}")
+            return set()
+    
+    def set_quiz_mode(self, chat_id, enabled):
+        """Persist Quiz Mode on/off for a group (upsert)."""
+        try:
+            collection = self.mongo.get_collection('group_settings')
+            if collection is not None:
+                collection.update_one(
+                    {'chat_id': chat_id},
+                    {'$set': {'chat_id': chat_id, 'quiz_mode': enabled}},
+                    upsert=True
+                )
+        except Exception as e:
+            print(f"⚠️ set_quiz_mode error: {e}")
     
     # ==========================================================
     # NEW: HIERARCHICAL QUIZ HELPERS (Subject → Folder → Questions)
@@ -2753,6 +2782,81 @@ class QuizBot:
                 [InlineKeyboardButton("📚 Back to Subjects", callback_data="qz_back_subjects", style='primary')]
             ])
         await update.message.reply_text(text, reply_markup=keyboard)
+    
+    # ==========================================================
+    # NEW: /quizmode — silent-delete non-quiz chatter during active quizzes
+    # ==========================================================
+    
+    async def quizmode_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/quizmode — toggle silent Quiz Mode for the current group (group admins only).
+        While ON, any message sent in the group while a quiz session is actively
+        running there gets silently deleted — including messages from admins —
+        to keep the poll answers visible and the chat clutter-free."""
+        chat = update.effective_chat
+        user_id = update.effective_user.id
+        
+        if chat.type not in ("group", "supergroup"):
+            await update.message.reply_text("ℹ️ This command only works in groups.")
+            return
+        
+        chat_id = chat.id
+        
+        # Group-admin (or bot admin) check
+        allowed = self.is_admin(user_id)
+        if not allowed:
+            try:
+                member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+                allowed = member.status in ("administrator", "creator")
+            except Exception:
+                allowed = False
+        
+        if not allowed:
+            await update.message.reply_text("❌ Only group admins can toggle Quiz Mode.")
+            return
+        
+        # Toggle
+        if chat_id in self.quiz_mode_groups:
+            self.quiz_mode_groups.discard(chat_id)
+            enabled = False
+        else:
+            self.quiz_mode_groups.add(chat_id)
+            enabled = True
+        
+        self.set_quiz_mode(chat_id, enabled)
+        
+        if enabled:
+            await update.message.reply_text(
+                "🔐 *Quiz Mode: ON*\n\n"
+                "While a quiz is actively running here, all non-quiz messages will "
+                "be silently deleted — including messages from admins.\n\n"
+                "Use /quizmode again to turn it off.",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                "🔓 *Quiz Mode: OFF*\n\n"
+                "Members can chat freely during quizzes now.",
+                parse_mode='Markdown'
+            )
+    
+    async def handle_group_message_quizmode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """NEW: Catch-all for non-command group messages. If Quiz Mode is ON for
+        this group AND a quiz session is actively running here right now, delete
+        the message silently. Registered with a low priority so it only ever
+        sees messages that no earlier (command) handler already claimed."""
+        chat = update.effective_chat
+        if not chat or chat.type not in ("group", "supergroup"):
+            return
+        chat_id = chat.id
+        if chat_id not in self.quiz_mode_groups:
+            return
+        session = self.group_sessions.get(chat_id)
+        if not session or session.get('completed'):
+            return
+        try:
+            await update.message.delete()
+        except Exception:
+            pass  # already deleted, or bot lacks delete permission in this group
     
     async def handle_qz_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """User tapped 'Restart This Quiz' on the completion screen"""
@@ -6138,6 +6242,9 @@ class QuizBot:
         self.application.add_handler(CommandHandler("done", self.done_adding_command))
         self.application.add_handler(CommandHandler("stop", self.stop_quiz_command))
         
+        # NEW: /quizmode — toggle silent-delete-during-active-quiz for a group
+        self.application.add_handler(CommandHandler("quizmode", self.quizmode_command))
+        
         # NEW: grade answers + AUTO-SEND the next question when the user votes
         self.application.add_handler(PollAnswerHandler(self.handle_poll_answer))
         
@@ -6155,6 +6262,13 @@ class QuizBot:
         self.application.add_handler(MessageHandler(
             filters.ChatType.PRIVATE & filters.Document.TEXT,
             self.handle_quiz_txt_upload
+        ))
+        
+        # NEW: Quiz Mode enforcement — silently delete non-command group messages
+        # while a quiz session is actively running in a Quiz-Mode-enabled group.
+        self.application.add_handler(MessageHandler(
+            filters.ChatType.GROUPS & ~filters.COMMAND,
+            self.handle_group_message_quizmode
         ))
         
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
@@ -6224,6 +6338,7 @@ class QuizBot:
         print(f"🗂 NEW: 'Manage Quiz Folders' in dashboard (view/create/rename/delete)")
         print(f"📝 NEW: Admin quiz-saving flow: Subject → Folder → send polls → /done")
         print(f"📄 NEW: Admin can also bulk-import quizzes from a formatted .txt file")
+        print(f"🔐 NEW: /quizmode — group admins can toggle silent message-deletion during active quizzes")
         print(f"🎮 NEW: /quiz command for all users (private chat) with per-user sessions")
         print(f"⚡ NEW: Auto-next — the next question is sent automatically after each answer")
         print(f"🛑 NEW: /stop command ends a running quiz and shows the result with score")
