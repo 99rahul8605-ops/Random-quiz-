@@ -1969,22 +1969,78 @@ class QuizBot:
         print(f"✅ Sent quiz '{quiz['question'][:30]}...' to {sent_to}/{len(active_groups)} groups at {datetime.now()}")
         print(f"📊 Recent quizzes tracking: {len(self.recently_sent_quizzes)} quizzes")
     
+    async def send_quiz_poll(self, bot, chat_id, question, options, correct_option_id,
+                              explanation=None, open_period=0, protect_content=False):
+        """NEW: Send a quiz poll, splitting long questions the way the .txt-import
+        bot does. Telegram polls cap the question at 300 characters — if ours is
+        longer, first send the full question + options as a text message, then
+        send the actual poll with a short placeholder question and A/B/C/D-style
+        options (so the poll's correct_option_id still lines up 1:1 with the
+        original options and grading/reporting keep working unchanged)."""
+        POLL_QUESTION_LIMIT = 300
+        
+        if len(question) > POLL_QUESTION_LIMIT:
+            option_labels = ['A', 'B', 'C', 'D'][:len(options)]
+            options_text = ""
+            for idx, opt in enumerate(options):
+                opt_clean = _OPT_PREFIX_RE.sub('', opt).strip()
+                options_text += f"{option_labels[idx]}) {opt_clean}\n"
+            
+            msg_text = "📋 *Question:*\n```\n" + question + "\n\n" + options_text.rstrip() + "\n```"
+            try:
+                await bot.send_message(chat_id=chat_id, text=msg_text, parse_mode='Markdown')
+            except Exception as e:
+                print(f"⚠️ Could not send long-question text: {e}")
+            
+            poll_options = []
+            for idx, label in enumerate(option_labels):
+                opt_clean = _OPT_PREFIX_RE.sub('', options[idx]).strip()
+                poll_options.append((f"{label}) {opt_clean}")[:100])
+            
+            poll_kwargs = dict(
+                chat_id=chat_id,
+                question="⬆️ Read above question and answer correctly",
+                options=poll_options,
+                type=Poll.QUIZ,
+                correct_option_id=correct_option_id,
+                is_anonymous=False,
+                allows_multiple_answers=False,
+                open_period=open_period,
+                protect_content=protect_content
+            )
+        else:
+            poll_kwargs = dict(
+                chat_id=chat_id,
+                question=question,
+                options=[opt[:100] for opt in options],
+                type=Poll.QUIZ,
+                correct_option_id=correct_option_id,
+                is_anonymous=False,
+                allows_multiple_answers=False,
+                open_period=open_period,
+                protect_content=protect_content
+            )
+        
+        if explanation:
+            poll_kwargs['explanation'] = explanation
+        
+        return await bot.send_poll(**poll_kwargs)
+    
     async def send_quiz_to_group(self, group, quiz):
         """Send a quiz to a specific group - ALWAYS NON-ANONYMOUS"""
         explanation = self.settings.get('quiz_explanation', "Check back later for results!")
         
         if quiz['type'] == 'quiz':
             # Send as QUIZ MODE poll with NON-ANONYMOUS voting (ALWAYS)
-            message = await self.application.bot.send_poll(
+            # NEW: send_quiz_poll auto-splits the question if it's too long for a poll
+            message = await self.send_quiz_poll(
+                self.application.bot,
                 chat_id=group['chat_id'],
                 question=f"🎯 Quiz Time: {quiz['question']}",
                 options=quiz['options'],
-                is_anonymous=False,  # ALWAYS force non-anonymous voting
-                allows_multiple_answers=False,  # Quiz mode doesn't allow multiple answers
-                type=Poll.QUIZ,  # Always QUIZ mode
                 correct_option_id=quiz['correct_option_id'],
                 explanation=explanation,
-                open_period=0,  # No time limit,
+                open_period=0,  # No time limit
                 protect_content=False  # Allow forwarding
             )
         
@@ -2931,13 +2987,12 @@ class QuizBot:
         # NEW: use the per-question timer chosen at quiz setup (0 = no limit)
         timer_seconds = session.get('timer_seconds', 0) or 0
         
-        message = await context.bot.send_poll(
+        # NEW: send_quiz_poll auto-splits the question if it's too long for a poll
+        message = await self.send_quiz_poll(
+            context.bot,
             chat_id=chat_id,
             question=f"Q{session.get('current_question', 0)}. {quiz['question']}",
             options=quiz['options'],
-            is_anonymous=False,
-            allows_multiple_answers=False,
-            type=Poll.QUIZ,
             correct_option_id=quiz['correct_option_id'],
             explanation=explanation,
             open_period=timer_seconds if timer_seconds > 0 else 0,
@@ -6339,6 +6394,7 @@ class QuizBot:
         print(f"📝 NEW: Admin quiz-saving flow: Subject → Folder → send polls → /done")
         print(f"📄 NEW: Admin can also bulk-import quizzes from a formatted .txt file")
         print(f"🔐 NEW: /quizmode — group admins can toggle silent message-deletion during active quizzes")
+        print(f"📏 NEW: Long questions (>300 chars) auto-split into a text message + placeholder poll")
         print(f"🎮 NEW: /quiz command for all users (private chat) with per-user sessions")
         print(f"⚡ NEW: Auto-next — the next question is sent automatically after each answer")
         print(f"🛑 NEW: /stop command ends a running quiz and shows the result with score")
